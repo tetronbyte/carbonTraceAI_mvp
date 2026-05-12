@@ -1,0 +1,148 @@
+# carbonTraceAI — MVP data dictionary
+# CBAM-only, sectors: aluminium (MZ, ZA), fertilisers (MA, EG)
+#
+# Each block lists the fields the ingestion layer must collect for the MVP.
+# `source` is the *primary* method; some fields fall back to MANUAL if the
+# primary is unavailable.
+# Reference codes (A1, B1.1, ...) match the user-supplied data map.
+
+blocks:
+  A_facility:
+    description: One-time facility & legal identity.
+    cadence: annual
+    fields:
+      - {code: A1,  name: legal_entity_name,           type: str,    source: MANUAL}
+      - {code: A2,  name: company_registration_number, type: str,    source: MANUAL}
+      - {code: A3,  name: plant_operating_name,        type: str,    source: MANUAL}
+      - {code: A4,  name: physical_address,            type: str,    source: MANUAL}
+      - {code: A5,  name: gps_lat,                     type: float,  source: MANUAL}
+      - {code: A5b, name: gps_lon,                     type: float,  source: MANUAL}
+      - {code: A6,  name: country,                     type: enum,   source: MANUAL, enum: [MZ, ZA, MA, EG]}
+      - {code: A7,  name: eu_cbam_declarant_name,      type: str,    source: MANUAL}
+      - {code: A8,  name: cn_codes,                    type: list,   source: MANUAL}
+      - {code: A9,  name: nace_code,                   type: str,    source: MANUAL}
+      - {code: A10, name: reporting_period_start,      type: date,   source: MANUAL}
+      - {code: A10b,name: reporting_period_end,        type: date,   source: MANUAL}
+      - {code: A11, name: design_capacity_t_per_year,  type: float,  source: MANUAL}
+      - {code: A14, name: functional_currency,         type: enum,   source: MANUAL, enum: [ZAR, MZN, MAD, EGP, EUR, USD]}
+      - {code: SECT,name: sector,                      type: enum,   source: MANUAL, enum: [aluminium, fertiliser]}
+
+  B_production:
+    description: Monthly production output, process route, BOM.
+    cadence: monthly
+    fields:
+      - {code: B1.1, name: total_production_tonnes,     type: float, source: ERP}
+      - {code: B1.2, name: eu_export_tonnes_by_cn,      type: dict,  source: ERP}
+      - {code: B1.3, name: domestic_sales_tonnes,       type: float, source: ERP}
+      - {code: B1.5, name: batch_run_id,                type: str,   source: ERP}
+      - {code: B1.6, name: coproduct_tonnes,            type: float, source: ERP}
+      - {code: B1.8, name: scrap_rate_pct,              type: float, source: ERP}
+      - {code: B2.2, name: aluminium_route,             type: enum,  source: MANUAL, enum: [primary, secondary, mix], applies_to: [aluminium]}
+      - {code: B2.3, name: ammonia_route,               type: enum,  source: MANUAL, enum: [SMR, ATR, electrolysis], applies_to: [fertiliser]}
+      - {code: B2.5, name: anode_type,                  type: enum,  source: MANUAL, enum: [pre_bake, soderberg], applies_to: [aluminium]}
+      - {code: B3,   name: bom,                         type: list,  source: ERP}
+
+  C_energy:
+    description: Monthly energy consumption — Scope 1 and Scope 2.
+    cadence: monthly
+    fields:
+      - {code: C1.1, name: natural_gas_m3,              type: float, source: METER, fallback: INVOICE}
+      - {code: C1.6, name: diesel_litres,               type: float, source: INVOICE}
+      - {code: C2.1, name: electricity_purchased_kwh,   type: float, source: METER, fallback: INVOICE}
+      - {code: C2.2, name: electricity_by_cost_centre,  type: dict,  source: METER, fallback: ERP}
+      - {code: C2.3, name: electricity_supplier,        type: enum,  source: MANUAL, enum: [Eskom, EDM, ONEE, EEHC]}
+      - {code: C2.7, name: self_gen_solar_kwh,          type: float, source: METER}
+      - {code: C3.1, name: purchased_steam_gj,          type: float, source: METER, fallback: INVOICE}
+
+  D2_aluminium_process:
+    description: Aluminium-specific process emissions.
+    cadence: monthly
+    applies_to: [aluminium]
+    fields:
+      - {code: D2.1,  name: alumina_consumed_tonnes,     type: float, source: ERP}
+      - {code: D2.2,  name: anode_consumption_tonnes,    type: float, source: ERP}
+      - {code: D2.4,  name: anode_effect_per_pot_day,    type: float, source: METER, fallback: MANUAL}
+      - {code: D2.5,  name: anode_effect_minutes,        type: float, source: METER, fallback: MANUAL}
+      - {code: D2.8,  name: alf3_consumption_kg_per_t,   type: float, source: ERP}
+      - {code: D2.9,  name: primary_al_output_tonnes,    type: float, source: ERP}
+      - {code: D2.10, name: secondary_al_output_tonnes,  type: float, source: ERP}
+      - {code: D2.11, name: scrap_al_input_tonnes,       type: float, source: ERP}
+
+  D3_fertiliser_process:
+    description: Fertiliser-specific process emissions.
+    cadence: monthly
+    applies_to: [fertiliser]
+    fields:
+      - {code: D3.1,  name: feedstock_natural_gas_nm3,   type: float, source: METER, fallback: INVOICE}
+      - {code: D3.2,  name: ammonia_production_tonnes,   type: float, source: ERP}
+      - {code: D3.3,  name: co2_captured_tco2,           type: float, source: METER}
+      - {code: D3.5,  name: urea_production_tonnes,      type: float, source: ERP}
+      - {code: D3.6,  name: nitric_acid_production_t,    type: float, source: ERP}
+      - {code: D3.8,  name: n2o_destruction_efficiency,  type: float, source: MANUAL}
+      - {code: D3.9,  name: n2o_kg_per_t_hno3,           type: float, source: METER, fallback: MANUAL}
+
+  E_precursor:
+    description: Precursor materials & supplier embedded emissions.
+    cadence: per_purchase
+    fields:
+      - {code: E1,  name: precursor_name,            type: str,   source: ERP}
+      - {code: E2,  name: precursor_cn_code,         type: str,   source: ERP}
+      - {code: E3,  name: quantity_tonnes,           type: float, source: ERP}
+      - {code: E4,  name: supplier_name,             type: str,   source: ERP}
+      - {code: E5,  name: supplier_country,          type: str,   source: SUPPLIER, fallback: MANUAL}
+      - {code: E7,  name: embedded_emissions_tco2_per_t, type: float, source: SUPPLIER, fallback: CALC}
+      - {code: E8,  name: ee_method,                 type: enum,  source: SUPPLIER, enum: [actual, default]}
+      - {code: E10, name: cbam_default_value,        type: float, source: CALC}
+      - {code: E11, name: supplier_carbon_price_eur, type: float, source: SUPPLIER, fallback: MANUAL}
+      - {code: E12, name: scrap_recycled_pct,        type: float, source: ERP, fallback: SUPPLIER}
+
+  F_fugitive:
+    description: Fugitive emissions (refrigerants, SF6, flaring).
+    cadence: annual
+    fields:
+      - {code: F1, name: refrigerant_type,    type: str,   source: MANUAL}
+      - {code: F2, name: refrigerant_topup_kg,type: float, source: MANUAL}
+      - {code: F4, name: sf6_charge_kg,       type: float, source: MANUAL}
+      - {code: F5, name: sf6_topup_kg,        type: float, source: MANUAL}
+      - {code: F7, name: flaring_nm3,         type: float, source: METER, fallback: MANUAL}
+
+  H_logistics:
+    description: Outbound logistics to EU (CBAM customs evidence).
+    cadence: per_shipment
+    fields:
+      - {code: H2.1, name: port_of_loading,    type: str,   source: ERP}
+      - {code: H2.2, name: port_of_discharge,  type: str,   source: ERP}
+      - {code: H2.4, name: cargo_tonnes_by_cn, type: dict,  source: ERP}
+      - {code: H2.5, name: sea_distance_nm,    type: float, source: CALC}
+      - {code: H2.6, name: bill_of_lading_pdf, type: file,  source: INVOICE}
+
+  K_monitoring:
+    description: MRV — methodology, EFs, calibrations, verifier.
+    cadence: per_period
+    fields:
+      - {code: K1,  name: monitoring_method,    type: enum, source: MANUAL, enum: [tier1, tier2, tier3, cems, mass_balance]}
+      - {code: K2,  name: emission_factor_source, type: str,  source: MANUAL}
+      - {code: K3,  name: gwp_set,              type: enum, source: MANUAL, enum: [AR5, AR6]}
+      - {code: K4,  name: meter_id,             type: str,  source: MANUAL}
+      - {code: K5,  name: last_calibration_date,type: date, source: MANUAL}
+      - {code: K11, name: verifier_name,        type: str,  source: MANUAL}
+      - {code: K12, name: verification_report,  type: file, source: INVOICE}
+
+# Country-specific defaults — pre-loaded grid emission factors.
+grid_emission_factors_kgco2_per_kwh:
+  ZA: 0.90    # Eskom
+  MZ: 0.04    # EDM (hydro-dominated)
+  MA: 0.62    # ONEE
+  EG: 0.45    # EEHC
+
+# CBAM Annex default embedded emissions (tCO2e/t) — fallback when supplier data missing.
+# Values approximate; replace with EU Implementing Regulation values in production.
+cbam_default_embedded_emissions:
+  # aluminium precursors / products (CN ch. 76)
+  "76011000": 8.6   # unwrought non-alloyed aluminium — primary
+  "76012000": 1.5   # unwrought aluminium alloys — secondary-heavy
+  # fertiliser precursors / products
+  "28080000": 2.4   # nitric acid
+  "31021010": 1.8   # urea (>45% N)
+  "28141000": 1.6   # anhydrous ammonia
+  "31022100": 0.9   # ammonium sulphate
