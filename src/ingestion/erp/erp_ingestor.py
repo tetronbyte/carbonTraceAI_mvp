@@ -24,8 +24,11 @@ from src.core.enums import (
 )
 from src.core.models import (
     EnergyConsumption,
+    GLEntry,
+    OutboundShipment,
     PrecursorPurchase,
     ProductionRun,
+    StockMovement,
 )
 from src.utils.logger import get_logger
 
@@ -107,8 +110,65 @@ def _default_mapper_for(stream: str) -> Callable[[dict[str, Any], str], Sequence
         "production_runs": _map_production_run,
         "purchase_orders": _map_purchase_order,
         "energy_meter_readings": _map_meter_reading,
+        "stock_movements": _map_stock_movement,
+        "gl_entries": _map_gl_entry_row,
+        "outbound_shipments": _map_outbound_shipment,
         # invoices and bom flow through OCR ingestor / future BOM mapper respectively
     }.get(stream, _noop_mapper)
+
+
+def _map_stock_movement(raw: dict[str, Any], ref: str) -> Sequence[BaseModel]:
+    unit_str = raw.get("unit", "tonnes")
+    try:
+        unit = UnitOfMeasure(unit_str)
+    except ValueError:
+        unit = UnitOfMeasure.TONNES
+    return [StockMovement(
+        source=SourceMethod.ERP, raw_ref=ref,
+        facility_id=raw.get("facility_id", "UNASSIGNED"),
+        movement_date=raw["movement_date"],
+        item_code=raw.get("item_code", "unknown"),
+        item_cn_code=raw.get("item_cn_code"),
+        qty=float(raw["qty"]),
+        unit=unit,
+        movement_type=raw.get("movement_type", "receive"),
+        work_order_id=raw.get("work_order_id"),
+        purchase_order_id=raw.get("purchase_order_id"),
+        cost_centre=raw.get("cost_centre"),
+    )]
+
+
+def _map_gl_entry_row(raw: dict[str, Any], ref: str) -> Sequence[BaseModel]:
+    return [GLEntry(
+        source=SourceMethod.ERP, raw_ref=ref,
+        facility_id=raw.get("facility_id", "UNASSIGNED"),
+        posting_date=raw["posting_date"],
+        voucher_type=raw.get("voucher_type", "Journal Entry"),
+        voucher_no=raw.get("voucher_no", ""),
+        account=raw.get("account", ""),
+        debit_local=float(raw.get("debit_local", 0)),
+        credit_local=float(raw.get("credit_local", 0)),
+        currency=raw.get("currency", "USD"),
+        cost_centre=raw.get("cost_centre"),
+        against_item_code=raw.get("against_item_code"),
+    )]
+
+
+def _map_outbound_shipment(raw: dict[str, Any], ref: str) -> Sequence[BaseModel]:
+    return [OutboundShipment(
+        source=SourceMethod.ERP, raw_ref=ref,
+        facility_id=raw.get("facility_id", "UNASSIGNED"),
+        shipment_date=raw["shipment_date"],
+        port_of_loading=raw.get("port_of_loading", "UNKNOWN"),
+        port_of_discharge=raw.get("port_of_discharge", "UNKNOWN"),
+        vessel_name=raw.get("vessel_name"),
+        cargo_tonnes=float(raw.get("cargo_tonnes", 0)),
+        cn_code=raw.get("cn_code", "00000000"),
+        sea_distance_nm=raw.get("sea_distance_nm"),
+        bill_of_lading_path=raw.get("bill_of_lading_path"),
+        eu_importer_name=raw.get("eu_importer_name"),
+        customs_invoice_value_eur=raw.get("customs_invoice_value_eur"),
+    )]
 
 
 def _noop_mapper(_raw: dict[str, Any], _ref: str) -> Sequence[BaseModel]:

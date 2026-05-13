@@ -69,6 +69,20 @@ class EngineConfig:
     coproduct_method: AllocationMethod = AllocationMethod.MASS
     mass_balance_tolerance_pct: float = 5.0
     energy_balance_tolerance_pct: float = 10.0
+    use_live_market_feeds: bool = False        # opt-in; defaults to static
+
+    def resolve_eua_price(self) -> float:
+        """Returns the live EUA spot price when enabled, falling back to the
+        static reference value. Network failures are silently swallowed."""
+        if not self.use_live_market_feeds:
+            return self.eua_price_eur_per_tco2e
+        try:
+            from .market_feeds import current_eua_price
+            return current_eua_price()
+        except Exception as exc:  # pragma: no cover — defensive
+            log.warning("Live EUA fetch failed (%s); using static %.2f",
+                        exc, self.eua_price_eur_per_tco2e)
+            return self.eua_price_eur_per_tco2e
 
 
 class CBAMCalculationEngine:
@@ -238,9 +252,9 @@ class CBAMCalculationEngine:
         direct_see, indirect_see, total_see = F.specific_embedded_emissions(
             direct_t, indirect_t, precursor_t, output_t,
         )
-        adjusted = F.adjusted_see(total_see, cp_eur, self.cfg.eua_price_eur_per_tco2e)
+        adjusted = F.adjusted_see(total_see, cp_eur, self.cfg.resolve_eua_price())
         cbam_cost = F.cbam_certificate_cost_eur(
-            adjusted, eu_export_t, self.cfg.eua_price_eur_per_tco2e,
+            adjusted, eu_export_t, self.cfg.resolve_eua_price(),
         )
 
         # ---- uncertainty rollup ----
@@ -275,7 +289,7 @@ class CBAMCalculationEngine:
             overall_uncertainty_pct=unc_total.pct,
             share_of_estimated_emissions=share_est,
             carbon_price_paid_eur_per_tco2e=cp_eur,
-            eua_price_eur_per_tco2e=self.cfg.eua_price_eur_per_tco2e,
+            eua_price_eur_per_tco2e=self.cfg.resolve_eua_price(),
             coproduct_allocation_method=self.cfg.coproduct_method.value,
             allocation_share=share,
             cbam_certificate_cost_eur=cbam_cost,

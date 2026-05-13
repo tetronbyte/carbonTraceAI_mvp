@@ -167,6 +167,73 @@ def _sector_from_cn(cn: str) -> str:
     return _SECTORS_BY_CN_PREFIX.get(cn[:2], "aluminium")
 
 
+def _map_stock_entry_item(doc: dict[str, Any]) -> dict[str, Any] | None:
+    """`Stock Entry Detail` (child of Stock Entry) → stock_movements row.
+    Closes the goods-movement leg of the three-way audit chain."""
+    qty = _safe_float(doc.get("qty") or doc.get("transfer_qty"))
+    if qty == 0:
+        return None
+    return {
+        "facility_id": doc.get("custom_facility_code") or "UNASSIGNED",
+        "movement_date": _to_iso(doc.get("posting_date") or doc.get("creation")) or date.today().isoformat(),
+        "item_code": doc.get("item_code") or "unknown",
+        "item_cn_code": doc.get("custom_cn_code") or "00000000",
+        "qty": qty,
+        "unit": (doc.get("uom") or doc.get("stock_uom") or "tonnes").lower(),
+        "movement_type": "receive" if qty > 0 else "issue",
+        "work_order_id": doc.get("parent") if doc.get("parent_doctype") == "Work Order" else None,
+        "purchase_order_id": doc.get("purchase_order") or None,
+        "cost_centre": doc.get("cost_center") or None,
+    }
+
+
+def _map_gl_entry(doc: dict[str, Any]) -> dict[str, Any] | None:
+    """`GL Entry` → gl_entries row. Enables the finance cross-check residual."""
+    debit = _safe_float(doc.get("debit"))
+    credit = _safe_float(doc.get("credit"))
+    if debit == 0 and credit == 0:
+        return None
+    return {
+        "facility_id": doc.get("custom_facility_code") or "UNASSIGNED",
+        "posting_date": _to_iso(doc.get("posting_date")) or date.today().isoformat(),
+        "voucher_type": doc.get("voucher_type") or "Journal Entry",
+        "voucher_no": doc.get("voucher_no") or doc.get("name") or "",
+        "account": doc.get("account") or "",
+        "debit_local": debit,
+        "credit_local": credit,
+        "currency": doc.get("account_currency") or "USD",
+        "cost_centre": doc.get("cost_center") or None,
+        "against_item_code": doc.get("against") or None,
+    }
+
+
+def _map_sales_invoice_item(doc: dict[str, Any]) -> dict[str, Any] | None:
+    """`Sales Invoice Item` → outbound_shipments row when the customer is EU.
+
+    The CN code, EU export tonnage, and customs invoice value flow into Block H
+    so the verifier can cross-check the EU declarant's CBAM report against the
+    operator's outbound sales records.
+    """
+    qty = _safe_float(doc.get("qty") or doc.get("stock_qty"))
+    if qty <= 0:
+        return None
+    cn = doc.get("custom_cn_code") or "00000000"
+    rate = _safe_float(doc.get("rate"))
+    return {
+        "facility_id": doc.get("custom_facility_code") or "UNASSIGNED",
+        "shipment_date": _to_iso(doc.get("posting_date") or doc.get("creation")) or date.today().isoformat(),
+        "port_of_loading": doc.get("custom_port_of_loading") or "UNKNOWN",
+        "port_of_discharge": doc.get("custom_port_of_discharge") or "UNKNOWN",
+        "vessel_name": doc.get("custom_vessel_name") or None,
+        "cargo_tonnes": qty,
+        "cn_code": cn,
+        "sea_distance_nm": None,
+        "bill_of_lading_path": doc.get("custom_bill_of_lading") or None,
+        "eu_importer_name": doc.get("customer") or None,
+        "customs_invoice_value_eur": round(qty * rate, 2) if rate > 0 else None,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
@@ -228,6 +295,43 @@ class ERPNextRunner:
             ],
             mapper=_map_purchase_invoice,
             filters={"docstatus": 1},
+        ),
+        # Stock Entry items — goods-movement leg of the audit chain.
+        StreamSpec(
+            canonical_stream="stock_movements",
+            doctype="Stock Entry Detail",
+            fields=[
+                "name", "parent", "parenttype", "item_code", "qty",
+                "uom", "stock_uom", "posting_date", "creation",
+                "custom_facility_code", "custom_cn_code",
+                "purchase_order", "cost_center",
+            ],
+            mapper=_map_stock_entry_item,
+        ),
+        # GL Entry — finance cross-check.
+        StreamSpec(
+            canonical_stream="gl_entries",
+            doctype="GL Entry",
+            fields=[
+                "name", "posting_date", "voucher_type", "voucher_no",
+                "account", "debit", "credit", "account_currency",
+                "cost_center", "against", "custom_facility_code",
+            ],
+            mapper=_map_gl_entry,
+            filters={"is_cancelled": 0},
+        ),
+        # Sales Invoice items — outbound shipments to EU customers.
+        StreamSpec(
+            canonical_stream="outbound_shipments",
+            doctype="Sales Invoice Item",
+            fields=[
+                "name", "parent", "item_code", "qty", "stock_qty", "rate",
+                "uom", "stock_uom", "posting_date", "creation",
+                "custom_facility_code", "custom_cn_code",
+                "custom_port_of_loading", "custom_port_of_discharge",
+                "custom_vessel_name", "custom_bill_of_lading",
+            ],
+            mapper=_map_sales_invoice_item,
         ),
     )
 

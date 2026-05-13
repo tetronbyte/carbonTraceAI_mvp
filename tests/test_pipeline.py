@@ -89,7 +89,10 @@ def test_erpnext_runner_writes_canonical_jsonl(monkeypatch, tmp_path):
 
     runner = ERPNextRunnerFresh(client)
     landings = runner.sync_all()
-    assert set(landings) == {"production_runs", "purchase_orders", "bill_of_materials", "invoices"}
+    assert set(landings) == {
+        "production_runs", "purchase_orders", "bill_of_materials", "invoices",
+        "stock_movements", "gl_entries", "outbound_shipments",
+    }
     prod_lines = landings["production_runs"].read_text().strip().splitlines()
     po_lines = landings["purchase_orders"].read_text().strip().splitlines()
     assert len(prod_lines) == 5
