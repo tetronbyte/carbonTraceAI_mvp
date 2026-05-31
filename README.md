@@ -184,9 +184,4 @@ CBAM IR Art.4(3)).
 
 The canonical model and the calc engine's `CalculationRun` are the contract — keep them stable.
 
-## Removed in the 2026-05 architecture pivot
 
-The earlier DataGen synthetic-stream simulator and its config schemas have been
-removed. Every ingestion path now flows through a real ERP system of record
-(ERPNext for the demo; SAP / Oracle / Dynamics / NetSuite / Sage / Odoo for live
-clients via the same connector framework).
