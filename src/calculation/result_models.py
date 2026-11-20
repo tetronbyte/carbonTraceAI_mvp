@@ -78,6 +78,11 @@ class ProductEmissions(BaseModel):
     # CBAM cost projection
     cbam_certificate_cost_eur: float = 0.0
 
+    # default-value method (official table incl. mark-up); None = not a CBAM good
+    default_see_tco2_per_t: Optional[float] = None
+    default_cbam_certificate_cost_eur: Optional[float] = None
+    default_value_source: Optional[str] = None
+
 
 class FacilityReport(BaseModel):
     """All products for one facility in one reporting period."""

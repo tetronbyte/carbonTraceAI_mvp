@@ -81,11 +81,24 @@ def test_erpnext_runner_writes_canonical_jsonl(monkeypatch, tmp_path):
     def iter_all(doctype, **_):
         if doctype == "Work Order":
             yield from (_fake_work_order(i) for i in range(5))
-        elif doctype == "Purchase Order Item":
-            yield from (_fake_po_item(i) for i in range(3))
+        elif doctype == "Purchase Order":
+            # Parent stubs — the runner will call get_doc for each.
+            yield from ({"name": f"PO-{i:04d}"} for i in range(3))
         else:
             yield from ()
     client.iter_all.side_effect = iter_all
+
+    def get_doc(doctype, name):
+        if doctype == "Purchase Order":
+            idx = int(name.split("-")[1])
+            return {
+                "name": name,
+                "supplier": "Alunorte Refinery",
+                "transaction_date": "2026-04-15",
+                "items": [_fake_po_item(idx)],
+            }
+        return {}
+    client.get_doc.side_effect = get_doc
 
     runner = ERPNextRunnerFresh(client)
     landings = runner.sync_all()

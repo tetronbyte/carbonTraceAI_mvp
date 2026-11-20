@@ -105,6 +105,7 @@ export type DashboardFacility = {
     financeResidualPct: number | null;
   };
   estimationFlags: string[];
+  warnings?: string[];
   products: DashboardProduct[];
 };
 

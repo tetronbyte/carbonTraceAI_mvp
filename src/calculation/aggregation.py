@@ -103,11 +103,11 @@ def aggregate_by_quarter(
 
     # precursors — bucket by *consuming* CN; for the MVP we attach by month
     # match to the largest production CN in that month (simple heuristic).
-    for p in precursor_payloads:
-        if p.get("facility_id") != facility_id:
-            continue
-        if not _row_in_q(p, "purchase_date", q_start, q_end):
-            continue
+    precursor_rows = [
+        p for p in precursor_payloads
+        if p.get("facility_id") == facility_id and _row_in_q(p, "purchase_date", q_start, q_end)
+    ]
+    for p in _supplier_declarations_win(precursor_rows):
         primary_cn = _primary_cn(buckets) or "?"
         b = buckets[primary_cn]; b.cn_code = primary_cn
         b.precursors.append(p)
@@ -154,6 +154,19 @@ def aggregate_by_quarter(
             buckets[cn].carbon_price_paid.append(c)
 
     return dict(buckets)
+
+
+def _supplier_declarations_win(rows: list[dict]) -> list[dict]:
+    """A supplier-portal row describes the same goods as the ERP PO it cites, so
+    it replaces that PO row instead of adding its tonnage a second time."""
+    declared_pos = {
+        p["po_number"] for p in rows
+        if p.get("source") == "SUPPLIER" and p.get("po_number")
+    }
+    return [
+        p for p in rows
+        if p.get("source") == "SUPPLIER" or p.get("po_number") not in declared_pos
+    ]
 
 
 def _row_in_q(row: dict, date_key: str, q_start: date, q_end: date) -> bool:

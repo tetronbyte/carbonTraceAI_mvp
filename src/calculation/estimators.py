@@ -70,17 +70,22 @@ def estimate_fuel_ef_kg_co2_per_gj(fuel_type: str, measured: Optional[float] = N
 def estimate_precursor_ee(
     cn_code: str,
     supplier_actual: Optional[float] = None,
+    country: Optional[str] = None,
+    year: int = 2026,
 ) -> EstimatedValue:
+    """`country` = ISO2 where the precursor was produced; `year` sets the mark-up."""
     if supplier_actual and supplier_actual > 0:
         return EstimatedValue(supplier_actual, 8.0, "supplier_actual",
                               "supplier portal declaration (verified)")
-    default = lut.cbam_default_embedded(cn_code)
+    default = lut.cbam_default(cn_code, country, year)
     if default:
         return EstimatedValue(default["total"], default["uncertainty_pct"],
                               "cbam_default",
-                              f"CBAM IR 2023/1773 Annex VIII (CN {cn_code})")
-    return EstimatedValue(2.0, 25.0, "estimated",
-                          f"fallback for unmapped CN {cn_code}; ±20% buffer")
+                              f"{lut.CBAM_DEFAULTS_REG}, table '{default['table']}' "
+                              f"(CN {cn_code}, +{default['markup_pct']:g}% mark-up)")
+    # Not a CBAM good: CBAM counts only relevant precursors that are CBAM goods.
+    return EstimatedValue(0.0, 0.0, "estimated",
+                          f"CN {cn_code} is not a CBAM good; no embedded emissions counted")
 
 
 # ---------------------------------------------------------------------------

@@ -26,7 +26,7 @@
 # This file is a self-contained adaptation of frappe_docker/pwd.yml.
 
 x-frappe-image: &frappe_image
-  image: frappe/erpnext:v15.74.4
+  image: frappe/erpnext:v15.120.0
   pull_policy: missing
 
 x-frappe-volumes: &frappe_volumes
@@ -162,12 +162,12 @@ services:
         condition: service_completed_successfully
 
   redis-queue:
-    image: redis:6.2-alpine
+    image: redis:7.0-alpine
     volumes:
       - redis-queue-data:/data
 
   redis-cache:
-    image: redis:6.2-alpine
+    image: redis:7.0-alpine
 
   scheduler:
     <<: [*frappe_image, *frappe_volumes]

@@ -61,13 +61,19 @@ class ERPNextClient:
 
     # ---- auth ----------------------------------------------------------------
     def login_with_password(self) -> None:
-        """Used by the seed script when no API key has been issued yet."""
+        """Used by the seed script when no API key has been issued yet.
+
+        Frappe's /api/method/login only accepts application/x-www-form-urlencoded.
+        We must NOT send Content-Type: application/json for this request, so we
+        override it to None for this one call only.
+        """
         if not (self.creds.username and self.creds.password):
             raise IngestionError("login_with_password requires username + password")
         url = f"{self.creds.normalised_url()}/api/method/login"
         r = self.session.post(
             url,
             data={"usr": self.creds.username, "pwd": self.creds.password},
+            headers={"Content-Type": None},  # remove JSON header for this request
             timeout=self.timeout,
         )
         r.raise_for_status()
@@ -202,14 +208,28 @@ class ERPNextClient:
     def submit(self, doctype: str, name: str) -> None:
         """Frappe documents move from draft to submitted. Many manufacturing
         doctypes (Work Order, Stock Entry, Sales Invoice) need this."""
+        # Fetch the full doc first to get the latest `modified` timestamp,
+        # otherwise Frappe raises TimestampMismatchError.
+        get_url = f"{self.creds.normalised_url()}/api/resource/{doctype}/{name}"
+        gr = self.session.get(get_url, timeout=self.timeout)
+        if gr.status_code >= 400:
+            raise IngestionError(
+                f"ERPNext submit {doctype}/{name}: fetch failed ({gr.status_code})",
+                doctype=doctype, status_code=gr.status_code,
+            )
+        doc = gr.json().get("data", {})
+        doc["docstatus"] = 1
         url = f"{self.creds.normalised_url()}/api/method/frappe.client.submit"
         r = self.session.post(
             url,
-            json={"doc": json.dumps({"doctype": doctype, "name": name})},
+            json={"doc": json.dumps(doc)},
             timeout=self.timeout,
         )
         if r.status_code >= 400:
-            log.warning("submit %s/%s failed: %s", doctype, name, r.text[:200])
+            raise IngestionError(
+                f"ERPNext submit {doctype}/{name} failed: {r.status_code} {r.text[:300]}",
+                doctype=doctype, status_code=r.status_code,
+            )
 
     def call_method(self, method_path: str, params: dict[str, Any] | None = None) -> Any:
         """Invoke an arbitrary whitelisted Frappe method (e.g. for custom-field setup)."""

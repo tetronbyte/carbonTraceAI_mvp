@@ -196,6 +196,7 @@ def dashboard_json(run: CalculationRun) -> str:
                     "financeResidualPct": fr.finance_cross_check_residual_pct,
                 },
                 "estimationFlags": fr.products_over_estimation_threshold,
+                "warnings": fr.missing_data_warnings,
                 "products": [_product_json(p) for p in fr.products],
             }
             for fr in run.facility_reports
@@ -218,6 +219,9 @@ def _product_json(p: ProductEmissions) -> dict:
         "shareEstimated": p.share_of_estimated_emissions,
         "carbonPricePaidEUR": p.carbon_price_paid_eur_per_tco2e,
         "cbamCostEUR": p.cbam_certificate_cost_eur,
+        "defaultSEE": p.default_see_tco2_per_t,
+        "defaultCbamCostEUR": p.default_cbam_certificate_cost_eur,
+        "defaultValueSource": p.default_value_source,
         "allocation": {"method": p.coproduct_allocation_method, "share": p.allocation_share},
         "lines": [
             {

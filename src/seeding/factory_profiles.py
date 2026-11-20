@@ -66,6 +66,9 @@ class FactoryProfile:
     currency: str
     electricity_supplier: str            # for the manual sensor / supplier portal flows
     grid_ef_kgco2_per_kwh: float
+    # Synthetic site electricity intensity. ERPNext holds no meter data, so the
+    # demo meter reading is sized from this and the quarter's output.
+    electricity_kwh_per_tonne: float
     items: tuple[ItemSpec, ...]
     suppliers: tuple[SupplierSpec, ...]
     eu_customers: tuple[SupplierSpec, ...]
@@ -108,6 +111,7 @@ MOZAL_ALUMINIUM = FactoryProfile(
     currency="USD",
     electricity_supplier="EDM",
     grid_ef_kgco2_per_kwh=0.04,         # hydro-dominated
+    electricity_kwh_per_tonne=14_500,   # typical Hall-Heroult smelter, demo value
     items=(
         # finished goods
         ItemSpec("AL-INGOT-P1020",  "Primary Aluminium Ingot P1020",       "76011000", "finished_good", "tonnes", is_finished=True),
@@ -197,6 +201,7 @@ OCP_FERTILISER = FactoryProfile(
     currency="USD",
     electricity_supplier="ONEE",
     grid_ef_kgco2_per_kwh=0.62,
+    electricity_kwh_per_tonne=150,      # blended fertiliser site, demo value
     items=(
         # finished goods
         ItemSpec("AMMONIA-ANH",     "Anhydrous Ammonia (NH3)",              "28141000", "finished_good", "tonnes", is_finished=True),

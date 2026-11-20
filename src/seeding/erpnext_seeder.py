@@ -23,6 +23,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from typing import Any
 
+from src.calculation import lookup_tables as lut
 from src.core.exceptions import IngestionError
 from src.ingestion.erp.erpnext_client import ERPNextClient
 from src.utils.logger import get_logger
@@ -63,6 +64,13 @@ _CUSTOM_FIELDS: list[dict[str, Any]] = [
     {"dt": "Purchase Invoice", "fieldname": "custom_facility_code",       "label": "Facility Code",     "fieldtype": "Data", "insert_after": "supplier"},
     {"dt": "Purchase Invoice", "fieldname": "custom_invoice_category",    "label": "CBAM Category",     "fieldtype": "Select", "options": "\nraw_material\nfuel\nelectricity\nnatural_gas\ndiesel\nlogistics\nother", "insert_after": "custom_facility_code"},
     {"dt": "Purchase Invoice", "fieldname": "custom_po_number",           "label": "Linked PO",         "fieldtype": "Data", "insert_after": "custom_invoice_category"},
+    # Stock Entry Detail
+    {"dt": "Stock Entry Detail", "fieldname": "custom_facility_code",     "label": "Facility Code",     "fieldtype": "Data", "insert_after": "item_code"},
+    {"dt": "Stock Entry Detail", "fieldname": "custom_cn_code",           "label": "CBAM CN",           "fieldtype": "Data", "insert_after": "custom_facility_code"},
+    {"dt": "Stock Entry Detail", "fieldname": "custom_work_order",        "label": "Work Order Ref",    "fieldtype": "Data", "insert_after": "custom_cn_code"},
+    # Sales Invoice Item
+    {"dt": "Sales Invoice Item", "fieldname": "custom_facility_code",     "label": "Facility Code",     "fieldtype": "Data", "insert_after": "item_code"},
+    {"dt": "Sales Invoice Item", "fieldname": "custom_cn_code",           "label": "CBAM CN",           "fieldtype": "Data", "insert_after": "custom_facility_code"},
 ]
 
 
@@ -112,6 +120,7 @@ class ERPNextSeeder:
         self.rand = random.Random(seed)
         self.invoice_ratio = invoice_ratio
         self.report = SeedReport(profile_key=profile.key)
+        self._bom_names: dict[str, str] = {}  # item_code → ERPNext BOM name
 
     # ---- public ----
     def run(self) -> SeedReport:
@@ -119,10 +128,18 @@ class ERPNextSeeder:
         self._provision_custom_fields()
         self._provision_uoms()
         self._provision_item_groups()
+        self._provision_supplier_groups()    # must come before _provision_suppliers
+        self._provision_territories()        # must come before _provision_customers
+        self._provision_customer_groups()    # must come before _provision_customers
         self._provision_items()
         self._provision_suppliers()
         self._provision_customers()
-        self._provision_cost_centres()       # NEW v2
+        self._provision_warehouse_types()    # must come before _provision_company
+        self._provision_fiscal_years()       # transactional docs need one per date
+        self._provision_company()            # must come before _provision_cost_centres
+        self._provision_cost_centres()
+        self._provision_eur_receivable()     # EUR sales invoices post to this account
+        self._grant_child_doctype_permissions()
         self._provision_boms()
         # Stoichiometric driver: planned monthly outputs first, then POs sized
         # from BOM ratios with a ±5% noise band. Mass-balance coherent.
@@ -153,6 +170,27 @@ class ERPNextSeeder:
                 else:
                     self.report.errors.append(f"custom_field {cf['fieldname']}: {e}")
 
+    # ---- child DocType API permissions (needed for ingestion pipeline) --------
+    def _grant_child_doctype_permissions(self) -> None:
+        """Grant read access to child DocTypes so the ingestion pipeline can
+        query them via get_list. ERPNext v15 restricts child table API access."""
+        child_doctypes = [
+            "Purchase Order Item", "BOM Item", "Stock Entry Detail",
+            "Sales Invoice Item", "GL Entry",
+        ]
+        for dt in child_doctypes:
+            try:
+                self.client.insert("Custom DocPerm", {
+                    "parent": dt,
+                    "parenttype": "DocType",
+                    "parentfield": "permissions",
+                    "role": "System Manager",
+                    "read": 1,
+                    "permlevel": 0,
+                })
+            except IngestionError:
+                pass  # already exists or not needed
+
     # ---- masters -------------------------------------------------------------
     def _provision_uoms(self) -> None:
         for uom in {"tonnes", "Nm3", "litres", "kg", "kWh"}:
@@ -162,12 +200,43 @@ class ERPNextSeeder:
                 if "already exists" not in str(e).lower() and "duplicate" not in str(e).lower():
                     self.report.errors.append(f"uom {uom}: {e}")
 
+    def _get_root_item_group(self) -> str:
+        """Return the name of the root Item Group on this ERPNext instance.
+
+        In a fresh frappe_docker install the root may be named 'All Item Groups'
+        or may not exist yet. We fetch the root (parent_item_group == '') and
+        fall back to creating one if the instance is truly empty.
+        """
+        try:
+            roots = self.client.get_list(
+                "Item Group",
+                fields=["name", "parent_item_group"],
+                filters=[["parent_item_group", "=", ""]],
+                limit=5,
+            )
+            if roots:
+                return roots[0]["name"]
+        except Exception:
+            pass
+
+        # No root found — create it (idempotent: ERPNext will 409 if it exists)
+        try:
+            self.client.insert("Item Group", {
+                "item_group_name": "All Item Groups",
+                "is_group": 1,
+            })
+        except IngestionError:
+            pass  # already exists under a different query result
+
+        return "All Item Groups"
+
     def _provision_item_groups(self) -> None:
+        root = self._get_root_item_group()
         for group in {"raw_material", "fuel", "feedstock", "finished_good"}:
             try:
                 self.client.insert("Item Group", {
                     "item_group_name": group,
-                    "parent_item_group": "All Item Groups",
+                    "parent_item_group": root,
                     "is_group": 0,
                 })
             except IngestionError as e:
@@ -193,6 +262,99 @@ class ERPNextSeeder:
                 self.report.items += 1
             except IngestionError as e:
                 self.report.errors.append(f"item {it.item_code}: {e}")
+
+    def _get_root_supplier_group(self) -> str:
+        """Return the root Supplier Group name, creating it if missing."""
+        try:
+            roots = self.client.get_list(
+                "Supplier Group",
+                fields=["name", "parent_supplier_group"],
+                filters=[["parent_supplier_group", "=", ""]],
+                limit=5,
+            )
+            if roots:
+                return roots[0]["name"]
+        except Exception:
+            pass
+        try:
+            self.client.insert("Supplier Group", {
+                "supplier_group_name": "All Supplier Groups",
+                "is_group": 1,
+            })
+        except IngestionError:
+            pass
+        return "All Supplier Groups"
+
+    def _provision_supplier_groups(self) -> None:
+        """Ensure the Supplier Groups used by factory profiles exist."""
+        root = self._get_root_supplier_group()
+        for group in {"Raw Material", "Energy", "Customer", "Services"}:
+            try:
+                self.client.insert("Supplier Group", {
+                    "supplier_group_name": group,
+                    "parent_supplier_group": root,
+                    "is_group": 0,
+                })
+            except IngestionError as e:
+                if "already exists" not in str(e).lower() and "duplicate" not in str(e).lower():
+                    self.report.errors.append(f"supplier_group {group}: {e}")
+
+    def _provision_territories(self) -> None:
+        """Ensure 'All Territories' exists — required by the Customer doctype."""
+        try:
+            roots = self.client.get_list(
+                "Territory",
+                fields=["name"],
+                filters=[["parent_territory", "=", ""]],
+                limit=5,
+            )
+            if roots:
+                return  # root already exists
+        except Exception:
+            pass
+        try:
+            self.client.insert("Territory", {
+                "territory_name": "All Territories",
+                "is_group": 1,
+            })
+        except IngestionError:
+            pass  # already exists
+
+    def _get_root_customer_group(self) -> str:
+        """Return the root Customer Group name, creating it if missing."""
+        try:
+            roots = self.client.get_list(
+                "Customer Group",
+                fields=["name", "parent_customer_group"],
+                filters=[["parent_customer_group", "=", ""]],
+                limit=5,
+            )
+            if roots:
+                return roots[0]["name"]
+        except Exception:
+            pass
+        try:
+            self.client.insert("Customer Group", {
+                "customer_group_name": "All Customer Groups",
+                "is_group": 1,
+            })
+        except IngestionError:
+            pass
+        return "All Customer Groups"
+
+    def _provision_customer_groups(self) -> None:
+        """Ensure the Customer Groups used by factory profiles exist."""
+        root = self._get_root_customer_group()
+        for group in {"Commercial", "Individual"}:
+            try:
+                self.client.insert("Customer Group", {
+                    "customer_group_name": group,
+                    "parent_customer_group": root,
+                    "is_group": 0,
+                })
+            except IngestionError as e:
+                if "already exists" not in str(e).lower() and "duplicate" not in str(e).lower():
+                    self.report.errors.append(f"customer_group {group}: {e}")
 
     def _provision_suppliers(self) -> None:
         for s in self.profile.suppliers:
@@ -222,11 +384,13 @@ class ERPNextSeeder:
 
     # ---- BOMs ----------------------------------------------------------------
     def _provision_boms(self) -> None:
+        abbr = self.profile.legal_name[:3].upper()
         for product in self.profile.products:
             finished_item = self._lookup_item(product.item_code)
             payload = {
                 "doctype": "BOM",
                 "item": product.item_code,
+                "company": self.profile.legal_name,
                 "quantity": 1,
                 "is_active": 1,
                 "is_default": 1,
@@ -246,27 +410,99 @@ class ERPNextSeeder:
                 ],
             }
             try:
-                self.client.insert("BOM", payload)
+                doc = self.client.insert("BOM", payload)
+                bom_name = doc.get("name", "")
+                if bom_name:
+                    self.client.submit("BOM", bom_name)
+                    self._bom_names[product.item_code] = bom_name
                 self.report.boms += 1
             except IngestionError as e:
-                # already exists for this item: fine
                 if "already exists" not in str(e).lower() and "duplicate" not in str(e).lower():
                     self.report.errors.append(f"bom {product.item_code}: {e}")
 
+    # ---- Warehouse Types (must exist before Company) ------------------------
+    def _provision_warehouse_types(self) -> None:
+        """Create the standard Warehouse Types that ERPNext expects when
+        creating a Company (it auto-creates warehouses of each type).
+        """
+        for wt in ("Transit", "Finished Goods", "Raw Material",
+                   "Work In Progress", "Rejected"):
+            try:
+                self.client.insert("Warehouse Type", {"name": wt})
+            except IngestionError as e:
+                if "already exists" not in str(e).lower() and "duplicate" not in str(e).lower():
+                    self.report.errors.append(f"warehouse_type {wt}: {e}")
+
+    # ---- Fiscal Years -------------------------------------------------------
+    def _provision_fiscal_years(self) -> None:
+        """One calendar Fiscal Year per year the seeded documents can fall in.
+        The setup wizard does not create these unless it is given FY dates."""
+        today = date.today()
+        first_year = today.year - (self.profile.months // 12 + 1)
+        for year in range(first_year, today.year + 1):
+            try:
+                self.client.insert("Fiscal Year", {
+                    "year": str(year),
+                    "year_start_date": f"{year}-01-01",
+                    "year_end_date": f"{year}-12-31",
+                })
+            except IngestionError as e:
+                if "already exists" not in str(e).lower() and "duplicate" not in str(e).lower():
+                    self.report.errors.append(f"fiscal_year {year}: {e}")
+
+    def _provision_eur_receivable(self) -> None:
+        """EU sales invoices are in EUR, and ERPNext requires the receivable
+        account to match the invoice currency."""
+        abbr = self.profile.legal_name[:3].upper()
+        try:
+            self.client.insert("Account", {
+                "account_name": "Debtors EUR",
+                "parent_account": f"Accounts Receivable - {abbr}",
+                "company": self.profile.legal_name,
+                "account_type": "Receivable",
+                "account_currency": "EUR",
+                "is_group": 0,
+            })
+        except IngestionError as e:
+            if "already exists" not in str(e).lower() and "duplicate" not in str(e).lower():
+                self.report.errors.append(f"account Debtors EUR: {e}")
+
+    # ---- Company (must exist before Cost Centers) ----------------------------
+    def _provision_company(self) -> None:
+        """Create the Company for this profile if it doesn't exist yet.
+
+        ERPNext auto-creates the root Cost Center ('<legal_name> - <abbr>')
+        and the root Account tree when a Company is inserted. Without this,
+        all Cost Center inserts fail with LinkValidationError.
+        """
+        abbr = self.profile.legal_name[:3].upper()
+        try:
+            self.client.insert("Company", {
+                "company_name": self.profile.legal_name,
+                "abbr": abbr,
+                "default_currency": self.profile.currency,
+                "country": _country_code_to_name(self.profile.country),
+            })
+            log.info("Created Company: %s (%s)", self.profile.legal_name, abbr)
+        except IngestionError as e:
+            if "already exists" not in str(e).lower() and "duplicate" not in str(e).lower():
+                self.report.errors.append(f"company {self.profile.legal_name}: {e}")
+
     # ---- Cost centres (Block C2.2 sub-process allocation) -------------------
     def _provision_cost_centres(self) -> None:
+        abbr = self.profile.legal_name[:3].upper()
+        parent_cc = f"{self.profile.legal_name} - {abbr}"
         for cc in self.profile.cost_centres:
             try:
                 self.client.insert("Cost Center", {
                     "cost_center_name": cc,
-                    "parent_cost_center": f"{self.profile.legal_name} - {self.profile.legal_name[:3].upper()}",
+                    "parent_cost_center": parent_cc,
                     "company": self.profile.legal_name,
                     "is_group": 0,
                 })
                 self.report.cost_centres += 1
             except IngestionError as e:
                 if "already exists" not in str(e).lower() and "duplicate" not in str(e).lower():
-                    # Cost-center insert is finicky in fresh installs — log and move on.
                     self.report.errors.append(f"cost_center {cc}: {e}")
 
     # ---- Stoichiometric driver: monthly demand plan ------------------------
@@ -342,10 +578,20 @@ class ERPNextSeeder:
         eu_share = max(0.0, min(1.0, self.rand.gauss(product.eu_export_share_mean, 0.06)))
         cn = self._cn_for(product.item_code)
         cost_centre = self.rand.choice(self.profile.cost_centres or ("site_total",))
+        abbr = self.profile.legal_name[:3].upper()
+        fg_warehouse = f"Finished Goods - {abbr}"
+        wip_warehouse = f"Work In Progress - {abbr}"
+        bom_no = self._bom_names.get(product.item_code, "")
         payload = {
             "doctype": "Work Order",
             "production_item": product.item_code,
+            "bom_no": bom_no,
+            "fg_warehouse": fg_warehouse,
+            "wip_warehouse": wip_warehouse,
             "qty": round(qty, 3),
+            # Without this the Work Order defaults to Nos, which the setup wizard
+            # marks whole-number, and fractional tonnages are rejected.
+            "stock_uom": "tonnes",
             "produced_qty": round(qty * produced_factor, 3),
             "planned_start_date": start_dt.isoformat(),
             "planned_end_date": end_dt.isoformat(),
@@ -368,41 +614,65 @@ class ERPNextSeeder:
             self.report.errors.append(f"work_order: {e}")
             return
 
-        # Quality inspection always emitted (some fail)
-        try:
-            self.client.insert("Quality Inspection", {
-                "inspection_type": "In Process",
-                "reference_type": "Work Order",
-                "reference_name": wo_name,
-                "item_code": product.item_code,
-                "sample_size": 1,
-                "status": "Accepted" if outcome == "Completed" else "Rejected",
-                "inspected_by": "QA Inspector",
-                "report_date": end_dt.date().isoformat(),
-            })
-            self.report.quality_inspections += 1
-        except IngestionError:
-            pass  # QA doctype can vary across versions — skip silently
-
-        # Stock Entry — manufacture (goods movement on completion)
+        # Stock Entry — goods movement on completion, followed by its quality
+        # inspection (ERPNext does not accept Work Order as an inspection
+        # reference). Left as drafts: Work Orders here are drafts too, ERPNext
+        # refuses a work_order link to one, and submitting would need raw
+        # material stock on hand. The Work Order is kept in a custom field.
         if outcome != "Scrap":
+            produced_t = qty * produced_factor
+            tags = {
+                "custom_facility_code": self.profile.facility_code,
+                "custom_work_order": wo_name,
+            }
+            # ERPNext requires raw material rows on a Manufacture entry.
+            consumed = [{
+                "item_code": ln.input_item,
+                "qty": round(produced_t * ln.qty_per_tonne_output, 3),
+                "uom": ln.uom,
+                "basic_rate": 100,
+                # No purchase receipts are seeded, so inputs have no stock value.
+                "allow_zero_valuation_rate": 1,
+                "s_warehouse": f"Stores - {abbr}",
+                "custom_cn_code": self._cn_for(ln.input_item),
+                **tags,
+            } for ln in product.bom]
             try:
-                self.client.insert("Stock Entry", {
+                entry = self.client.insert("Stock Entry", {
                     "stock_entry_type": "Manufacture",
-                    "work_order": wo_name,
                     "company": self.profile.legal_name,
                     "posting_date": end_dt.date().isoformat(),
-                    "items": [{
+                    "items": consumed + [{
                         "item_code": product.item_code,
-                        "qty": round(qty * produced_factor, 3),
-                        "uom": product.bom[0].uom if product.bom else "tonnes",
+                        "qty": round(produced_t, 3),
+                        "uom": "tonnes",
                         "basic_rate": 100,
                         "is_finished_item": 1,
+                        "t_warehouse": fg_warehouse,
+                        "custom_cn_code": cn,
+                        **tags,
                     }],
                 })
                 self.report.stock_entries += 1
-            except IngestionError:
-                pass  # depends on warehouse setup; skip in pwd image
+            except IngestionError as e:
+                self.report.errors.append(f"stock_entry {wo_name}: {e}")
+                entry = None
+
+            if entry:
+                try:
+                    self.client.insert("Quality Inspection", {
+                        "inspection_type": "In Process",
+                        "reference_type": "Stock Entry",
+                        "reference_name": entry.get("name"),
+                        "item_code": product.item_code,
+                        "sample_size": 1,
+                        "status": "Accepted" if outcome == "Completed" else "Rejected",
+                        "inspected_by": "Administrator",
+                        "report_date": end_dt.date().isoformat(),
+                    })
+                    self.report.quality_inspections += 1
+                except IngestionError as e:
+                    self.report.errors.append(f"quality_inspection {wo_name}: {e}")
 
         # Rework recursion (only one level deep)
         if outcome == "Rework" and parent_run_id is None:
@@ -469,6 +739,7 @@ class ERPNextSeeder:
                     "rate": round(rate, 4),
                     "uom": uom,
                     "stock_uom": uom,
+                    "warehouse": f"Stores - {self.profile.legal_name[:3].upper()}",
                     "schedule_date": schedule_date.isoformat(),
                     "custom_facility_code": self.profile.facility_code,
                     "custom_cn_code": item.cn_code,
@@ -478,17 +749,23 @@ class ERPNextSeeder:
             })
             self.report.purchase_orders += 1
             po_name = po_doc.get("name")
+            # A Purchase Invoice cannot be submitted against a draft PO.
+            if po_name:
+                self.client.submit("Purchase Order", po_name)
         except IngestionError as e:
             self.report.errors.append(f"purchase_order: {e}")
             return
 
         # Invoice a fraction
         if po_name and self.rand.random() < self.invoice_ratio:
+            posting = min(schedule_date + timedelta(days=self.rand.randint(0, 10)), date.today())
             try:
-                self.client.insert("Purchase Invoice", {
+                pi_doc = self.client.insert("Purchase Invoice", {
                     "doctype": "Purchase Invoice",
                     "supplier": supplier.supplier_name,
-                    "posting_date": (schedule_date + timedelta(days=self.rand.randint(0, 10))).isoformat(),
+                    "posting_date": posting.isoformat(),
+                    "set_posting_time": 1,
+                    "bill_date": posting.isoformat(),
                     "company": self.profile.legal_name,
                     "currency": self.profile.currency,
                     "conversion_rate": 1,
@@ -504,9 +781,11 @@ class ERPNextSeeder:
                         "purchase_order": po_name,
                     }],
                 })
+                # The invoices stream pulls submitted documents only.
+                self.client.submit("Purchase Invoice", pi_doc.get("name"))
                 self.report.purchase_invoices += 1
-            except IngestionError:
-                pass
+            except IngestionError as e:
+                self.report.errors.append(f"purchase_invoice {po_name}: {e}")
 
     # ---- transactional: Sales Invoices for EU exports -----------------------
     def _generate_sales_invoices(self, monthly_plans: list[dict]) -> None:
@@ -523,26 +802,34 @@ class ERPNextSeeder:
                 for share, customer in zip(shares, self.rand.sample(list(self.profile.eu_customers), n_customers)):
                     inv_date = month_start + timedelta(days=self.rand.randint(5, 27))
                     rate = self._typical_rate(self._lookup_item(product.item_code)) * 1.2
+                    abbr = self.profile.legal_name[:3].upper()
                     try:
-                        self.client.insert("Sales Invoice", {
+                        si_doc = self.client.insert("Sales Invoice", {
                             "doctype": "Sales Invoice",
                             "customer": customer.supplier_name,
                             "posting_date": inv_date.isoformat(),
+                            "set_posting_time": 1,
+                            "due_date": (inv_date + timedelta(days=30)).isoformat(),
                             "company": self.profile.legal_name,
                             "currency": "EUR",
-                            "conversion_rate": 1,
-                            "custom_facility_code": self.profile.facility_code,
-                            "custom_invoice_category": "logistics",
+                            "conversion_rate": round(1 / lut.FX_TO_EUR[self.profile.currency], 4),
+                            "selling_price_list": "Standard Selling",
+                            "price_list_currency": "EUR",
+                            "plc_conversion_rate": round(1 / lut.FX_TO_EUR[self.profile.currency], 4),
+                            "debit_to": f"Debtors EUR - {abbr}",
                             "items": [{
                                 "item_code": product.item_code,
                                 "qty": round(share, 3),
                                 "rate": round(rate, 2),
                                 "uom": "tonnes",
+                                "custom_facility_code": self.profile.facility_code,
+                                "custom_cn_code": self._cn_for(product.item_code),
                             }],
                         })
+                        self.client.submit("Sales Invoice", si_doc.get("name"))
                         self.report.sales_invoices += 1
-                    except IngestionError:
-                        pass
+                    except IngestionError as e:
+                        self.report.errors.append(f"sales_invoice {customer.supplier_name}: {e}")
 
     # ---- helpers -------------------------------------------------------------
     def _lookup_item(self, item_code: str) -> ItemSpec | None:

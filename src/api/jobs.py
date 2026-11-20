@@ -13,12 +13,15 @@ import threading
 import time
 import traceback
 import uuid
+from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
 from src.calculation import CBAMCalculationEngine, EngineConfig, write_all
+from src.calculation.aggregation import quarter_bounds, quarter_of
+from src.calculation.lookup_tables import cbam_default
 from src.ingestion.erp.erpnext_client import ERPNextClient, ERPNextCredentials
 from src.ingestion.orchestrator import IngestionOrchestrator
 from src.seeding import ERPNextSeeder, get_profile
@@ -227,7 +230,10 @@ def _run_pipeline(
                 "sales_invoices": report.sales_invoices,
                 "errors": len(report.errors),
             }
-            _succeed(job, s, f"{report.work_orders} WOs + {report.purchase_orders} POs + {report.sales_invoices} SInv")
+            for err in report.errors[:5]:
+                _emit(job, f"seed error: {err[:300]}")
+            errors_note = f" ({len(report.errors)} seed errors)" if report.errors else ""
+            _succeed(job, s, f"{report.work_orders} WOs + {report.purchase_orders} POs + {report.sales_invoices} SInv{errors_note}")
     except Exception as e:
         _fail(job, s, str(e))
         job.state = "failed"; job.error = str(e); job.finished_at = _now()
@@ -236,6 +242,10 @@ def _run_pipeline(
     # 3. Pull canonical streams
     s = _begin(job, "pull_erp")
     try:
+        # Re-pull replaces this facility's rows; otherwise reruns double-count.
+        removed = repo.clear_facility(profile.facility_code, legal_entity_name=profile.legal_name)
+        if removed:
+            _emit(job, f"cleared {removed} canonical rows from the previous run")
         orch = IngestionOrchestrator(repository=repo)
         orch.run_erpnext_direct(creds)
         events = [r.event for r in orch.report.results]
@@ -257,8 +267,7 @@ def _run_pipeline(
     # 4. Manual / supplier / OCR supplement (always-on for the demo)
     s = _begin(job, "manual_supplement")
     try:
-        _emit_demo_manual_supplements(orch, profile)
-        _succeed(job, s, "facility + sensor + supplier + OCR added")
+        _succeed(job, s, _emit_demo_manual_supplements(job, orch, repo, profile))
     except Exception as e:
         _emit(job, f"manual_supplement warning: {e}\n{traceback.format_exc(limit=2)}")
         _succeed(job, s, "(partial) " + str(e))
@@ -273,6 +282,16 @@ def _run_pipeline(
             raise RuntimeError("calc engine produced zero facility reports")
         fr = run.facility_reports[0]
         product = fr.products[0] if fr.products else None
+        for warning in fr.missing_data_warnings:
+            _emit(job, f"warning: {warning}")
+        if fr.total_emissions_tco2e <= 0:
+            # A plant with output cannot have zero emissions: this means the
+            # inputs are missing, so do not publish it as a successful report.
+            raise RuntimeError(
+                "calc engine produced 0 tCO2e for "
+                f"{sum(p.output_tonnes for p in fr.products):,.0f} t of output in {fr.quarter}: "
+                + ("; ".join(fr.missing_data_warnings) or "no activity data")
+            )
         job.calc_summary = {
             "calc_run_id": run.run_id,
             "facility_id": fr.facility_id,
@@ -309,9 +328,35 @@ def _run_pipeline(
     _emit(job, "✓✓✓ pipeline complete")
 
 
-def _emit_demo_manual_supplements(orch: IngestionOrchestrator, profile) -> None:
-    """One row each of facility / sensor / supplier / OCR so the audit view
-    has all source types represented."""
+def _emit_demo_manual_supplements(
+    job: JobState, orch: IngestionOrchestrator, repo: Repository, profile,
+) -> str:
+    """Add facility / meter / process / supplier / OCR rows for the demo.
+
+    ERPNext has no meter or smelter data, so these values are SYNTHETIC. They are
+    derived from the seeded production and BOMs for the quarter the calc engine
+    will report on, because rows outside that quarter are ignored by the engine.
+    Returns a one-line summary for the step detail.
+    """
+    runs = [r for r in repo.fetch_payloads("production_runs")
+            if r.get("facility_id") == profile.facility_code]
+    if not runs:
+        raise RuntimeError(f"no production runs pulled for {profile.facility_code}")
+    latest = max(date.fromisoformat(str(r["run_started_at"])[:10]) for r in runs)
+    q_start, q_end = quarter_bounds(quarter_of(latest))
+
+    output_by_item: dict[str, float] = defaultdict(float)
+    for r in runs:
+        if q_start <= date.fromisoformat(str(r["run_started_at"])[:10]) <= q_end:
+            output_by_item[r.get("product_name", "")] += float(r.get("output_tonnes", 0))
+    total_output_t = sum(output_by_item.values())
+
+    def bom_input(item_code: str) -> float:
+        return sum(
+            output_by_item.get(p.item_code, 0.0) * line.qty_per_tonne_output
+            for p in profile.products for line in p.bom if line.input_item == item_code
+        )
+
     qs, qe = date(date.today().year, 1, 1), date(date.today().year, 12, 31)
     orch.run_manual("facility", [{
         "legal_entity_name": profile.legal_name,
@@ -330,26 +375,66 @@ def _emit_demo_manual_supplements(orch: IngestionOrchestrator, profile) -> None:
     }])
     orch.run_sensor([{
         "facility_id": profile.facility_code,
-        "period_start": date(date.today().year, max(1, date.today().month - 1), 1),
-        "period_end": date.today(),
+        "period_start": q_start,
+        "period_end": q_end,
         "meter_id": "MTR-DEMO-001",
         "meter_type": "electricity_subprocess",
         "cost_centre": profile.cost_centres[0] if profile.cost_centres else "site_total",
-        "quantity": 10_000_000, "unit": "kWh",
+        "quantity": round(total_output_t * profile.electricity_kwh_per_tonne, 1), "unit": "kWh",
         "quality_flag": "ok",
     }])
-    orch.run_supplier([{
-        "facility_id": profile.facility_code,
-        "po_number": "PO-DEMO-001",
-        "precursor_name": profile.products[0].bom[0].input_item if profile.products and profile.products[0].bom else "alumina",
-        "precursor_cn_code": "28182000",
-        "quantity_tonnes": 25_000,
-        "supplier_name": profile.suppliers[0].supplier_name if profile.suppliers else "Demo supplier",
-        "supplier_country": profile.suppliers[0].country if profile.suppliers else "BR",
-        "embedded_emissions_tco2_per_t": 1.05,
-        "ee_method": "actual",
-        "purchase_date": date.today(),
-    }])
+
+    if profile.sector == "aluminium":
+        orch.run_manual("aluminium_process_monthly", [{
+            "facility_id": profile.facility_code,
+            "period_start": q_start,
+            "period_end": q_end,
+            "alumina_consumed_tonnes": round(bom_input("ALUMINA-SG"), 3),
+            "anode_consumption_tonnes": round(bom_input("ANODE-PREBAKE"), 3),
+            "primary_al_output_tonnes": round(total_output_t, 3),
+        }])
+    elif profile.sector == "fertiliser":
+        orch.run_manual("fertiliser_process_monthly", [{
+            "facility_id": profile.facility_code,
+            "period_start": q_start,
+            "period_end": q_end,
+            "feedstock_natural_gas_nm3": round(bom_input("NAT-GAS-FS"), 1),
+            "ammonia_production_tonnes": round(output_by_item.get("AMMONIA-ANH", 0.0), 3),
+            "urea_production_tonnes": round(output_by_item.get("UREA-PRILLED", 0.0), 3),
+            "nitric_acid_production_tonnes": round(output_by_item.get("HNO3-58", 0.0), 3),
+        }])
+
+    # Supplier declaration for the largest real PO in the quarter. It cites the
+    # PO number, so the calc engine replaces that row instead of adding tonnage.
+    pos = [p for p in repo.fetch_payloads("precursor_purchases")
+           if p.get("facility_id") == profile.facility_code and p.get("source") == "ERP"
+           and q_start <= date.fromisoformat(str(p["purchase_date"])[:10]) <= q_end
+           and cbam_default(p.get("precursor_cn_code") or "", p.get("supplier_country"), q_start.year)]
+    if pos:
+        po = max(pos, key=lambda p: float(p.get("quantity_tonnes", 0)))
+        orch.run_supplier([{
+            "facility_id": profile.facility_code,
+            "po_number": po["po_number"],
+            "precursor_name": po["precursor_name"],
+            "precursor_cn_code": po["precursor_cn_code"],
+            "quantity_tonnes": po["quantity_tonnes"],
+            "supplier_name": po["supplier_name"],
+            "supplier_country": po.get("supplier_country") or "??",
+            # Demo: declared value slightly under the official default (before mark-up).
+            "embedded_emissions_tco2_per_t": round(cbam_default(
+                po["precursor_cn_code"], po.get("supplier_country"), q_start.year)["base"] * 0.95, 3),
+            "ee_method": "actual",
+            "purchase_date": po["purchase_date"],
+        }])
+
+    ocr_note = "OCR not run"
     sample = Path("data/samples/sample_electricity_invoice.png")
     if sample.exists():
-        orch.run_ocr([sample], facility_id=profile.facility_code)
+        try:
+            orch.run_ocr([sample], facility_id=profile.facility_code)
+            ocr_note = "OCR added"
+        except Exception as e:
+            # OCR is optional (needs a local Tesseract install); keep the run going.
+            ocr_note = "OCR skipped"
+            _emit(job, f"OCR skipped: {str(e).splitlines()[0]}")
+    return f"facility + meter + process + supplier added (synthetic demo values); {ocr_note}"

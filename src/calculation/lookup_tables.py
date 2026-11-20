@@ -6,7 +6,8 @@ Sources (citation-ready for the verifier):
     (default NCV) and Table 1.4 (default carbon EFs).
   - IPCC 2006 Guidelines, Vol 3 Ch 4 (PFC defaults for aluminium).
   - IPCC AR5 / AR6 100-year GWPs (Table 7.SM.7).
-  - CBAM Implementing Regulation 2023/1773, Annex III & VIII default values.
+  - CBAM default values: IR 2025/2621 Annex I as replaced by IR 2026/1740
+    (data/cbam_default_values_2026_1740.csv).
 
 Every default has a *value*, a *unit*, and a *±uncertainty %*. The calc engine
 propagates the uncertainty into the final SEE — defaults carry larger bands
@@ -15,7 +16,10 @@ the 20% estimated-emissions threshold (CBAM IR Art.4(3)).
 """
 from __future__ import annotations
 
+import csv
 from dataclasses import dataclass
+from functools import lru_cache
+from pathlib import Path
 from typing import Optional
 
 
@@ -97,31 +101,68 @@ def kg_co2_per_unit(fuel: str) -> float:
 
 
 # ---------------------------------------------------------------------------
-# CBAM Annex III / VIII default embedded emissions per CN code (tCO2e/t)
+# Official CBAM default values (tCO2e/t): IR 2025/2621 Annex I as replaced by
+# IR 2026/1740. CSV built by scripts/build_cbam_defaults.py from the OJ HTML.
 # ---------------------------------------------------------------------------
-# Values are approximations of the published Annex; replace with the official
-# Commission XLS once you have an internet connection during onboarding.
-CBAM_DEFAULT_EMBEDDED: dict[str, dict[str, float]] = {
-    # ----- Aluminium (CN Ch.76) -----
-    "76011000": {"direct": 1.6, "indirect": 7.0, "total": 8.6, "uncertainty_pct": 20.0},
-    "76012000": {"direct": 0.5, "indirect": 1.0, "total": 1.5, "uncertainty_pct": 25.0},
-    # ----- Fertilisers (CN Ch.28, 31) -----
-    "28141000": {"direct": 2.1, "indirect": 0.3, "total": 2.4, "uncertainty_pct": 15.0},
-    "31021010": {"direct": 1.5, "indirect": 0.3, "total": 1.8, "uncertainty_pct": 15.0},
-    "28080000": {"direct": 2.1, "indirect": 0.3, "total": 2.4, "uncertainty_pct": 15.0},
-    "31053000": {"direct": 0.8, "indirect": 0.2, "total": 1.0, "uncertainty_pct": 20.0},
-    # ----- Precursors -----
-    "28182000": {"direct": 0.7, "indirect": 0.4, "total": 1.1, "uncertainty_pct": 20.0},  # alumina
-    "38011000": {"direct": 0.6, "indirect": 0.3, "total": 0.9, "uncertainty_pct": 20.0},  # carbon anode
-    "28261200": {"direct": 0.8, "indirect": 0.4, "total": 1.2, "uncertainty_pct": 20.0},  # AlF3
-    "25101000": {"direct": 0.10, "indirect": 0.05, "total": 0.15, "uncertainty_pct": 25.0}, # phosphate rock
-    "31042000": {"direct": 0.20, "indirect": 0.10, "total": 0.30, "uncertainty_pct": 20.0}, # potash
-    "25030000": {"direct": 0.05, "indirect": 0.02, "total": 0.07, "uncertainty_pct": 25.0}, # sulphur
+CBAM_DEFAULTS_REG = "IR 2025/2621 Annex I as replaced by IR 2026/1740"
+CBAM_DEFAULTS_CSV = Path(__file__).resolve().parents[2] / "data" / "cbam_default_values_2026_1740.csv"
+_OTHER = "other countries and territories"
+
+# ISO2 -> country table name in the OJ annex.
+# shortcut: only countries the MVP or its target market uses; add a row per new country (unmapped -> Other table).
+_EU_COUNTRY_NAME = {
+    "MZ": "Mozambique", "MA": "Morocco", "ZA": "South Africa", "EG": "Egypt",
+    "TZ": "Tanzania, United Republic of", "KE": "Kenya", "UG": "Uganda", "RW": "Rwanda",
+    "ET": "Ethiopia", "ZM": "Zambia", "ZW": "Zimbabwe", "NG": "Nigeria", "GH": "Ghana",
+    "DZ": "Algeria", "TN": "Tunisia", "BR": "Brazil", "CD": "Congo, Democratic Republic of",
 }
 
+# Not in the regulation: uncertainty band the MVP attaches to any default value.
+CBAM_DEFAULT_UNCERTAINTY_PCT = 20.0
 
-def cbam_default_embedded(cn_code: str) -> Optional[dict[str, float]]:
-    return CBAM_DEFAULT_EMBEDDED.get(cn_code)
+
+@lru_cache(maxsize=1)
+def _official_defaults() -> dict[str, dict[str, tuple[Optional[float], str]]]:
+    """{country lower: {cn_code: (total or None for "-", sector)}}."""
+    out: dict[str, dict[str, tuple[Optional[float], str]]] = {}
+    with CBAM_DEFAULTS_CSV.open(encoding="utf-8") as f:
+        for r in csv.DictReader(f):
+            out.setdefault(r["country"].lower(), {})[r["cn_code"]] = (
+                float(r["total"]) if r["total"] else None, r["sector"])
+    return out
+
+
+def _longest_prefix(table: dict, cn: str):
+    hits = [c for c in table if cn.startswith(c)]
+    return table[max(hits, key=len)] if hits else None
+
+
+def cbam_markup_pct(sector: str, year: int) -> float:
+    """Annex I intro: 1 % for fertilisers; 10/20/30 % (2026/2027/2028+) otherwise."""
+    if sector == "Fertilisers":
+        return 1.0
+    return 10.0 if year <= 2026 else 20.0 if year == 2027 else 30.0
+
+
+def cbam_default(cn_code: str, iso2: Optional[str], year: int) -> Optional[dict]:
+    """Official default (TOTAL column, recital 10) for a good, with mark-up.
+
+    Longest CN/TARIC prefix match in the country table; country unmapped or
+    value "-" -> "Other Countries and Territories". None = not a CBAM good.
+    shortcut: a CN shorter than the table's TARIC codes (e.g. 8-digit clinker vs 10-digit) finds no match there.
+    """
+    cn = "".join(ch for ch in cn_code if ch.isdigit())
+    tables = _official_defaults()
+    name = _EU_COUNTRY_NAME.get((iso2 or "").upper(), _OTHER).lower()
+    hit = _longest_prefix(tables.get(name, {}), cn)
+    if not hit or hit[0] is None:
+        name, hit = _OTHER, _longest_prefix(tables[_OTHER], cn)
+    if not hit or hit[0] is None:
+        return None
+    base, sector = hit
+    markup = cbam_markup_pct(sector, year)
+    return {"base": base, "total": base * (1 + markup / 100), "markup_pct": markup,
+            "sector": sector, "table": name, "uncertainty_pct": CBAM_DEFAULT_UNCERTAINTY_PCT}
 
 
 # ---------------------------------------------------------------------------

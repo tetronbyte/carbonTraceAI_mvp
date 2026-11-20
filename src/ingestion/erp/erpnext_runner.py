@@ -48,6 +48,18 @@ class StreamSpec:
     fields: list[str]
     mapper: Callable[[dict[str, Any]], dict[str, Any] | None]
     filters: dict | list | None = None
+    # --- child-doctype support ---
+    # When set, the runner queries the *parent* doctype instead and extracts
+    # child rows from `child_table` on each parent doc. This avoids 403
+    # FORBIDDEN errors that ERPNext v15 returns for direct child-table queries.
+    parent_doctype: str | None = None
+    child_table: str | None = None
+    # Fields to request on the parent (only `name` is strictly needed, but
+    # parent-level fields like `supplier` or `transaction_date` are injected
+    # into each child row so the mapper can access them).
+    parent_fields: list[str] | None = None
+    # Keys from the parent doc to inject into each child row before mapping.
+    parent_inject_keys: list[str] | None = None
 
 
 def _to_iso(v: Any) -> str | None:
@@ -180,8 +192,8 @@ def _map_stock_entry_item(doc: dict[str, Any]) -> dict[str, Any] | None:
         "item_cn_code": doc.get("custom_cn_code") or "00000000",
         "qty": qty,
         "unit": (doc.get("uom") or doc.get("stock_uom") or "tonnes").lower(),
-        "movement_type": "receive" if qty > 0 else "issue",
-        "work_order_id": doc.get("parent") if doc.get("parent_doctype") == "Work Order" else None,
+        "movement_type": "consume" if doc.get("s_warehouse") and not doc.get("t_warehouse") else "receive",
+        "work_order_id": doc.get("custom_work_order") or None,
         "purchase_order_id": doc.get("purchase_order") or None,
         "cost_centre": doc.get("cost_center") or None,
     }
@@ -243,6 +255,12 @@ class ERPNextRunner:
 
     Returns a `{stream_name: jsonl_path}` map so the caller can hand each path
     to an `ErpIngestor` instance (one per stream).
+
+    Child doctypes (Purchase Order Item, BOM Item, Stock Entry Detail,
+    Sales Invoice Item) are fetched via their parent doctype and the child
+    table is extracted from each parent doc. This avoids the 403 FORBIDDEN
+    error that ERPNext v15 returns when querying child tables directly via
+    ``frappe.client.get_list``.
     """
 
     STREAM_SPECS: tuple[StreamSpec, ...] = (
@@ -260,29 +278,27 @@ class ERPNextRunner:
             mapper=_map_work_order,
             filters={"docstatus": ["!=", 2]},
         ),
+        # Purchase Order Item — fetched via parent Purchase Order.
         StreamSpec(
             canonical_stream="purchase_orders",
             doctype="Purchase Order Item",
-            fields=[
-                "name", "parent", "item_code", "item_name",
-                "qty", "stock_qty", "uom", "stock_uom", "rate",
-                "schedule_date", "creation",
-                "custom_facility_code", "custom_cn_code",
-                "custom_supplier_name", "custom_supplier_country",
-                "transaction_date",
-            ],
+            fields=[],  # not used for child-table specs
             mapper=_map_purchase_order_item,
+            parent_doctype="Purchase Order",
+            child_table="items",
+            parent_fields=["name", "supplier", "transaction_date"],
+            parent_inject_keys=["supplier", "transaction_date"],
         ),
+        # BOM Item — fetched via parent BOM.
         StreamSpec(
             canonical_stream="bill_of_materials",
             doctype="BOM Item",
-            fields=[
-                "name", "parent", "item_code", "qty", "uom", "stock_uom",
-                "creation",
-                "custom_facility_code", "custom_product_cn_code",
-                "custom_input_cn_code", "custom_recycled_content_pct",
-            ],
+            fields=[],
             mapper=_map_bom_item,
+            parent_doctype="BOM",
+            child_table="items",
+            parent_fields=["name"],
+            parent_inject_keys=[],
         ),
         StreamSpec(
             canonical_stream="invoices",
@@ -296,42 +312,39 @@ class ERPNextRunner:
             mapper=_map_purchase_invoice,
             filters={"docstatus": 1},
         ),
-        # Stock Entry items — goods-movement leg of the audit chain.
+        # Stock Entry Detail — fetched via parent Stock Entry.
         StreamSpec(
             canonical_stream="stock_movements",
             doctype="Stock Entry Detail",
-            fields=[
-                "name", "parent", "parenttype", "item_code", "qty",
-                "uom", "stock_uom", "posting_date", "creation",
-                "custom_facility_code", "custom_cn_code",
-                "purchase_order", "cost_center",
-            ],
+            fields=[],
             mapper=_map_stock_entry_item,
+            parent_doctype="Stock Entry",
+            child_table="items",
+            parent_fields=["name", "posting_date"],
+            parent_inject_keys=["posting_date"],
         ),
-        # GL Entry — finance cross-check.
+        # GL Entry is a top-level doctype (not a child table), so direct query works.
         StreamSpec(
             canonical_stream="gl_entries",
             doctype="GL Entry",
             fields=[
                 "name", "posting_date", "voucher_type", "voucher_no",
                 "account", "debit", "credit", "account_currency",
-                "cost_center", "against", "custom_facility_code",
+                "cost_center", "against",
             ],
             mapper=_map_gl_entry,
             filters={"is_cancelled": 0},
         ),
-        # Sales Invoice items — outbound shipments to EU customers.
+        # Sales Invoice Item — fetched via parent Sales Invoice.
         StreamSpec(
             canonical_stream="outbound_shipments",
             doctype="Sales Invoice Item",
-            fields=[
-                "name", "parent", "item_code", "qty", "stock_qty", "rate",
-                "uom", "stock_uom", "posting_date", "creation",
-                "custom_facility_code", "custom_cn_code",
-                "custom_port_of_loading", "custom_port_of_discharge",
-                "custom_vessel_name", "custom_bill_of_lading",
-            ],
+            fields=[],
             mapper=_map_sales_invoice_item,
+            parent_doctype="Sales Invoice",
+            child_table="items",
+            parent_fields=["name", "posting_date", "customer"],
+            parent_inject_keys=["posting_date", "customer"],
         ),
     )
 
@@ -342,26 +355,82 @@ class ERPNextRunner:
     def sync_all(self) -> dict[str, Path]:
         out: dict[str, Path] = {}
         for spec in self.STREAM_SPECS:
-            out[spec.canonical_stream] = self._sync_stream(spec)
+            try:
+                out[spec.canonical_stream] = self._sync_stream(spec)
+            except Exception as exc:
+                log.warning("ERPNext: stream %s failed, skipping: %s",
+                            spec.canonical_stream, exc)
         return out
 
     def _sync_stream(self, spec: StreamSpec) -> Path:
         landing = RawLandingZone(source="erpnext", stream=spec.canonical_stream)
-        log.info("ERPNext: pulling %s -> %s", spec.doctype, landing.path)
+
+        if spec.parent_doctype and spec.child_table:
+            label = f"{spec.parent_doctype}.{spec.child_table}"
+        else:
+            label = spec.doctype
+        log.info("ERPNext: pulling %s -> %s", label, landing.path)
 
         rows_in = rows_written = 0
         with landing.open() as writer:
-            for raw in self.client.iter_all(
-                spec.doctype,
-                fields=spec.fields,
-                filters=spec.filters,
-                page_size=self.page_size,
-            ):
+            if spec.parent_doctype and spec.child_table:
+                # Child-table path: fetch each parent doc and extract child rows.
+                source: Iterable[dict[str, Any]] = self._iter_child_docs(spec)
+            else:
+                # Top-level doctype: direct query.
+                source = self.client.iter_all(
+                    spec.doctype,
+                    fields=spec.fields,
+                    filters=spec.filters,
+                    page_size=self.page_size,
+                )
+
+            for raw in source:
                 rows_in += 1
                 row = spec.mapper(raw)
                 if row is None:
                     continue
                 writer.write(row)
                 rows_written += 1
-        log.info("ERPNext: %s — pulled=%s, written=%s", spec.doctype, rows_in, rows_written)
+        log.info("ERPNext: %s — pulled=%s, written=%s", label, rows_in, rows_written)
         return landing.path
+
+    def _iter_child_docs(self, spec: StreamSpec) -> Iterable[dict[str, Any]]:
+        """Fetch parent docs and yield child rows from the specified table.
+
+        ERPNext v15 restricts ``frappe.client.get_list`` on child doctypes
+        (returns 403). The workaround is to list parent doc names, then
+        ``get_doc`` each one and iterate over its child table.
+
+        Parent-level fields listed in ``spec.parent_inject_keys`` are copied
+        into each child row so the mapper has access to them (e.g. the PO's
+        ``supplier`` and ``transaction_date``).
+        """
+        assert spec.parent_doctype and spec.child_table
+        parent_fields = spec.parent_fields or ["name"]
+        inject_keys = spec.parent_inject_keys or []
+
+        for parent_stub in self.client.iter_all(
+            spec.parent_doctype,
+            fields=parent_fields,
+            filters=spec.filters,
+            page_size=self.page_size,
+        ):
+            parent_name = parent_stub.get("name")
+            if not parent_name:
+                continue
+            try:
+                full_doc = self.client.get_doc(spec.parent_doctype, parent_name)
+            except Exception as exc:
+                log.warning("ERPNext: failed to fetch %s/%s: %s",
+                            spec.parent_doctype, parent_name, exc)
+                continue
+
+            children = full_doc.get(spec.child_table, [])
+            for child in children:
+                # Inject parent-level fields into the child row.
+                child["parent"] = parent_name
+                for key in inject_keys:
+                    if key not in child:
+                        child[key] = full_doc.get(key)
+                yield child

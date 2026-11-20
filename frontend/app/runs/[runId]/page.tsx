@@ -95,6 +95,15 @@ function FacilityDashboard({ facility }: { facility: DashboardFacility }) {
         </div>
       </div>
 
+      {(facility.warnings?.length ?? 0) > 0 && (
+        <div className="rounded-lg border border-amber-400/30 bg-amber-400/5 p-3 text-xs text-amber-400 space-y-1">
+          <div className="flex items-center gap-2 font-medium">
+            <AlertTriangle className="w-3.5 h-3.5" /> Data gaps in this report
+          </div>
+          {facility.warnings?.map((w) => <p key={w}>{w}</p>)}
+        </div>
+      )}
+
       {/* KPI tiles */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <Kpi label="Total emissions"

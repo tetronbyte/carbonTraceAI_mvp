@@ -39,12 +39,20 @@ log = get_logger(__name__)
 _PRECURSOR_MATERIALS = {
     "alumina", "carbon_anode_block", "aluminium_fluoride", "aluminium_scrap",
     "phosphate_rock", "potash", "sulphur", "limestone",
+    # ERPNext item codes after the runner normalises them (factory_profiles.py)
+    "alumina_sg", "anode_prebake", "alf3", "cryolite",
+    "phos_rock", "potash_kcl", "sulphur_el",
 }
 
 _FUEL_TO_METER = {
     "natural_gas": (MeterType.NATURAL_GAS, UnitOfMeasure.NM3, FuelType.NATURAL_GAS),
     "diesel": (MeterType.DIESEL_GENERATOR, UnitOfMeasure.LITRES, FuelType.DIESEL),
     "heavy_fuel_oil": (MeterType.DIESEL_GENERATOR, UnitOfMeasure.LITRES, FuelType.HEAVY_FUEL_OIL),
+    # ERPNext item codes. NAT-GAS-FS is excluded on purpose: feedstock gas is
+    # counted as process CO2 through FertiliserProcessRecord, not as combustion.
+    "nat_gas": (MeterType.NATURAL_GAS, UnitOfMeasure.NM3, FuelType.NATURAL_GAS),
+    "nat_gas_fuel": (MeterType.NATURAL_GAS, UnitOfMeasure.NM3, FuelType.NATURAL_GAS),
+    "hfo": (MeterType.DIESEL_GENERATOR, UnitOfMeasure.TONNES, FuelType.HEAVY_FUEL_OIL),
 }
 
 _METER_TYPE_MAP = {
@@ -241,6 +249,8 @@ def _map_purchase_order(raw: dict[str, Any], ref: str) -> Sequence[BaseModel]:
                 quality_flag="ok",
             )
         ]
+    log.warning("PO %s: material %r is neither a precursor nor a fuel; no emissions row created",
+                raw.get("po_number"), material)
     return []
 
 

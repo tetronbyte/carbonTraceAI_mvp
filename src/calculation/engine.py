@@ -233,6 +233,7 @@ class CBAMCalculationEngine:
                         indirect_lines[indirect_lines.index(line)] = EmissionLine(**line_dict)
 
         # ---- precursor (complex-goods) emissions ----
+        year = int(bucket.quarter[:4])
         precursor_lines: list[EmissionLine] = []
         for p in bucket.precursors:
             precursor_lines.append(F.precursor_line(
@@ -242,6 +243,8 @@ class CBAMCalculationEngine:
                     p.get("precursor_cn_code") or "00000000",
                     supplier_actual=p.get("embedded_emissions_tco2_per_t")
                     if p.get("ee_method") == "actual" else None,
+                    country=p.get("supplier_country") or country,
+                    year=year,
                 ),
             ))
 
@@ -256,6 +259,13 @@ class CBAMCalculationEngine:
         cbam_cost = F.cbam_certificate_cost_eur(
             adjusted, eu_export_t, self.cfg.resolve_eua_price(),
         )
+        # Default-value method for the exported good itself (official table + mark-up)
+        dv = lut.cbam_default(cn, country, year)
+        default_see = dv["total"] if dv else None
+        default_cost = F.cbam_certificate_cost_eur(
+            F.adjusted_see(default_see, cp_eur, self.cfg.resolve_eua_price()),
+            eu_export_t, self.cfg.resolve_eua_price(),
+        ) if dv else None
 
         # ---- uncertainty rollup ----
         all_lines = direct_lines + indirect_lines + precursor_lines
@@ -293,6 +303,10 @@ class CBAMCalculationEngine:
             coproduct_allocation_method=self.cfg.coproduct_method.value,
             allocation_share=share,
             cbam_certificate_cost_eur=cbam_cost,
+            default_see_tco2_per_t=default_see,
+            default_cbam_certificate_cost_eur=default_cost,
+            default_value_source=(f"{lut.CBAM_DEFAULTS_REG}, table '{dv['table']}', "
+                                  f"+{dv['markup_pct']:g}% mark-up") if dv else None,
         )
 
     # ---- emission-line factories --------------------------------------------
@@ -433,6 +447,21 @@ class CBAMCalculationEngine:
                 fr.missing_data_warnings.append(
                     f"No precursor data for CN {p.product_cn_code} — defaulted to 0"
                 )
+            if p.direct_emissions_tco2e == 0:
+                fr.missing_data_warnings.append(
+                    f"No fuel or process data for CN {p.product_cn_code} — direct emissions are 0"
+                )
+            if p.indirect_emissions_tco2e == 0:
+                fr.missing_data_warnings.append(
+                    f"No electricity or steam data for CN {p.product_cn_code} — indirect emissions are 0"
+                )
+        if len(fr.products) > 1:
+            # aggregate_by_quarter attaches facility-level energy and process
+            # records to every CN without splitting them.
+            fr.missing_data_warnings.append(
+                "Facility has several CN codes: energy and process emissions are counted "
+                "in full for each one, so totals are overstated"
+            )
 
     # ---- helpers -------------------------------------------------------------
     def _safe_fetch(self, table: str) -> list[dict]:

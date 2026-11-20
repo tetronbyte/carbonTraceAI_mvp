@@ -27,3 +27,6 @@ data/*.db-journal
 !data/raw/.gitkeep
 !data/staged/.gitkeep
 !data/reports/.gitkeep
+
+# Claude Code worktrees (local only)
+.claude/worktrees/

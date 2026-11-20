@@ -1,0 +1,16 @@
+[Unit]
+Description=carbonTraceAI FastAPI backend
+After=network.target docker.service
+Wants=docker.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/carbonTraceAI_mvp
+Environment=PATH=/root/carbonTraceAI_mvp/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
+ExecStart=/root/carbonTraceAI_mvp/venv/bin/uvicorn src.api.main:app --host 127.0.0.1 --port 8000
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

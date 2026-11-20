@@ -1,0 +1,16 @@
+[Unit]
+Description=carbonTraceAI Next.js frontend
+After=network.target carbontrace-api.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/carbonTraceAI_mvp/frontend
+ExecStart=/usr/bin/npm start
+Restart=always
+RestartSec=5
+Environment=NODE_ENV=production
+Environment=PORT=3000
+
+[Install]
+WantedBy=multi-user.target

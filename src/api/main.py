@@ -41,7 +41,7 @@ app = FastAPI(title="carbonTraceAI API", version="0.1.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -83,9 +83,9 @@ def health(base_url: Optional[str] = Query(None)) -> dict:
     erpnext_reachable: Optional[bool] = None
     if base_url:
         try:
-            erpnext_reachable = ERPNextClient(
-                ERPNextCredentials(base_url=base_url)
-            ).ping()
+            import requests as _req
+            r = _req.get(base_url.rstrip("/"), timeout=5, allow_redirects=True)
+            erpnext_reachable = r.status_code < 500
         except Exception:
             erpnext_reachable = False
     return {

@@ -38,10 +38,32 @@ def test_ipcc_natural_gas_default():
     assert d.ncv_gj_per_unit == pytest.approx(39.0, rel=0.01)
 
 
-def test_cbam_default_primary_aluminium():
-    v = lut.cbam_default_embedded("76011000")
-    assert v is not None
-    assert v["total"] == pytest.approx(8.6, rel=0.01)
+def test_cbam_default_official_values_and_markup():
+    # MZ unwrought Al: HS 7601 = 3.198 (direct only), +10 % mark-up in 2026
+    v = lut.cbam_default("76011000", "MZ", 2026)
+    assert v["base"] == pytest.approx(3.198)
+    assert v["total"] == pytest.approx(3.198 * 1.10)
+    assert lut.cbam_default("76011000", "MZ", 2028)["total"] == pytest.approx(3.198 * 1.30)
+    # TZ grey cement 0.900; fertilisers always +1 %
+    assert lut.cbam_default("25232900", "TZ", 2027)["total"] == pytest.approx(0.900 * 1.20)
+    assert lut.cbam_default("28141000", "MA", 2027)["total"] == pytest.approx(2.200 * 1.01)
+
+
+def test_cbam_default_falls_back_to_other_countries():
+    assert lut.cbam_default("76011000", "TZ", 2026)["base"] == pytest.approx(0.36)
+    # TZ calcined clay is "-" -> Other table (0.28)
+    v = lut.cbam_default("2507008080", "TZ", 2026)
+    assert (v["table"], v["base"]) == ("other countries and territories", pytest.approx(0.28))
+    # unmapped country -> "Other Countries and Territories" (7601 = 2.203)
+    for iso2 in ("XX", None):
+        v = lut.cbam_default("76011000", iso2, 2026)
+        assert v["table"] == "other countries and territories"
+        assert v["base"] == pytest.approx(2.203)
+
+
+def test_non_cbam_precursor_counts_zero():
+    assert lut.cbam_default("28182000", "BR", 2026) is None   # alumina is not a CBAM good
+    assert est.estimate_precursor_ee("28182000", country="BR").value == 0.0
 
 
 def test_gwp_ar6_cf4_higher_than_ar5():
@@ -215,6 +237,9 @@ def test_engine_runs_aluminium_facility(repo):
     assert p.total_see_tco2_per_t > 2.0
     # CBAM cost: SEE × 30k t × €75
     assert p.cbam_certificate_cost_eur > 0
+    # Default-value method: MZ 7601 = 3.198 × 1.10 (2026 mark-up), × 30k t × €75
+    assert p.default_see_tco2_per_t == pytest.approx(3.198 * 1.10)
+    assert p.default_cbam_certificate_cost_eur == pytest.approx(3.198 * 1.10 * 30_000 * 75)
 
 
 def test_carbon_price_deduction_reduces_adjusted_see(repo):

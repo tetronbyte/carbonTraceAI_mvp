@@ -23,6 +23,7 @@ from sqlalchemy import (
     Table,
     Text,
     create_engine,
+    delete,
     func,
     insert,
     select,
@@ -162,6 +163,33 @@ class Repository:
         row["finished_at"] = _coerce_dt(row.get("finished_at"))
         with self.engine.begin() as conn:
             conn.execute(insert(self._tables["ingestion_events"]), [row])
+
+    def clear_facility(self, facility_id: str, legal_entity_name: str | None = None) -> int:
+        """Delete one facility's canonical rows so a re-pull replaces them.
+
+        Rows get a fresh UUID on every ingest, so without this each pipeline run
+        adds to the previous one and double-counts output and emissions.
+        `ingestion_events` is an append-only audit log and is left alone.
+        Facility rows carry no facility_id, so they match on legal entity name.
+        UNASSIGNED rows (e.g. GL entries, which have no facility) are re-pulled
+        too, so they are cleared as well.
+        """
+        removed = 0
+        with self.engine.begin() as conn:
+            for name, table in self._tables.items():
+                if name in ("ingestion_events", "facilities"):
+                    continue
+                removed += conn.execute(
+                    delete(table).where(table.c.facility_id.in_((facility_id, "UNASSIGNED")))
+                ).rowcount
+            if legal_entity_name:
+                facilities = self._tables["facilities"]
+                for row in conn.execute(select(facilities)).mappings().all():
+                    if json.loads(row["payload"]).get("legal_entity_name") == legal_entity_name:
+                        removed += conn.execute(
+                            delete(facilities).where(facilities.c.id == row["id"])
+                        ).rowcount
+        return removed
 
     # ---- reads (for downstream layers) ----
     def count(self, table: str) -> int:

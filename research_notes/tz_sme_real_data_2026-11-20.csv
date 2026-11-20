@@ -1,0 +1,38 @@
+company,country,sector,size_class,cbam_cn,metric,value,unit,year,boundary,data_quality,source
+Tanzania Portland Cement (Twiga),TZ,cement,large (listed; Heidelberg 69%),2523 29 00,scope1_absolute,923000,tCO2e,2025,company scope 1 (calcination + kiln fuel + onsite power),primary_reported,TPCPLC Annual Report & AFS 2025 sect. 26
+Tanzania Portland Cement (Twiga),TZ,cement,large,2523 29 00,scope1_intensity,506.29,kg CO2/t cement,2025,company scope 1,primary_reported,TPCPLC Annual Report & AFS 2025 sect. 26
+Tanzania Portland Cement (Twiga),TZ,cement,large,2523 29 00,scope2_absolute,58537,tCO2e,2025,location-based; grid EF 0.336,primary_reported,TPCPLC Annual Report & AFS 2025 sect. 26
+Tanzania Portland Cement (Twiga),TZ,cement,large,2523 29 00,scope2_intensity,32.11,kg CO2/t cement,2025,location-based,primary_reported,TPCPLC Annual Report & AFS 2025 sect. 26
+Tanzania Portland Cement (Twiga),TZ,cement,large,2523 29 00,cement_production_derived,1823000,t cement,2025,derived = 923000 / 0.50629,derived,computed from reported figures
+Tanzania Portland Cement (Twiga),TZ,cement,large,2523 29 00,grid_electricity_derived,174200,MWh,2025,derived = 58537 / 0.336,derived,computed from reported figures
+Tanzania Portland Cement (Twiga),TZ,cement,large,2523 29 00,electricity_intensity_derived,95.6,kWh/t cement,2025,derived,derived,computed from reported figures
+Tanzania Portland Cement (Twiga),TZ,cement,large,2523 29 00,alt_fuel_thermal_substitution,22.9,%,2025,kiln fuel,primary_reported,TPCPLC Annual Report & AFS 2025
+Tanzania Portland Cement (Twiga),TZ,cement,large,2523 29 00,scope1_intensity,508,kg CO2/t cement,2024,company scope 1,primary_reported,TPCPLC Annual Report & AFS 2025
+Tanzania Portland Cement (Twiga),TZ,cement,large,2523 29 00,scope1_intensity,504,kg CO2/t cement,2023,company scope 1,primary_reported,TPCPLC Integrated Annual Report 2023 p5
+Tanzania Portland Cement (Twiga),TZ,cement,large,2523 29 00,scope1_intensity,540,kg CO2/t cement,2022,company scope 1,primary_reported,TPCPLC Integrated Annual Report 2023 p5
+Tanzania Portland Cement (Twiga),TZ,cement,large,2523 29 00,kiln_fuel,natural gas + biomass,text,2025,,primary_reported,TPCPLC Annual Report & AFS 2025
+Tanga Cement (Simba),TZ,cement,large (listed; Scancem/Heidelberg ~75%),2523 29 00,scope1_intensity,512,kg CO2/t cement,2025,company scope 1,primary_reported,Tanga Cement Report & AFS 2025 p59-60
+Tanga Cement (Simba),TZ,cement,large,2523 29 00,scope1_target_2025,551,kg CO2/t cement,2025,,primary_reported,Tanga Cement Report & AFS 2025
+Tanga Cement (Simba),TZ,cement,large,2523 29 00,kiln_fuel,coal (Songea) + carbon black AF; TANESCO grid power,text,2025,,primary_reported,Tanga Cement Report & AFS 2025
+Tanga Cement (Simba),TZ,cement,large,2523100090,clinker_exports,Rwanda + other regional (no EU stated),text,2025,,primary_reported,Tanga Cement Report & AFS 2025
+Lake Cement (Nyati),TZ,cement,mid,2523 29 00,capacity,500000,t/yr,~2019,,secondary,Wikipedia Nyati Cement
+Lake Cement (Nyati),TZ,cement,mid,2523 29 00,onsite_power,10 MW coal plant (Songea coal),text,~2019,,secondary_unverified,Wikipedia Nyati Cement (citation needed)
+Kamal Steel,TZ,iron_steel,SME/mid,7214 20 00,capacity,80000,t/yr rebar (scrap-based),~2023,,secondary,Fastmarkets East Africa special report
+Kamal Steel,TZ,iron_steel,SME/mid,7214 20 00,ifc_loan,6.0,USD million working capital,~2024,,primary_reported,IFC disclosure 46058
+Lodhia Industries,TZ,iron_steel,mid,7207 / 7214,capacity,500000,t/yr (expanding to 800000 by H1 2027),2026,,primary_reported,lodhiaindustries.com; Danieli press release
+Lodhia Industries,TZ,iron_steel,mid,7207 11 14,billet_capacity_mkuranga,150000,t/yr,2019,,secondary,The EastAfrican 2019
+ALAF (Safal Group),TZ,iron_steel (coated steel; not aluminium),mid,7210,capacity,70000,t/yr Al-Zn coated coil,~2018,,secondary,thecitizen.co.tz
+ALAF (Safal Group),TZ,iron_steel,mid,7210,substrate,imported coils (India/Japan),text,~2018,,secondary,thecitizen.co.tz
+ITRACOM Fertilizers,TZ,fertiliser,large (new),3101/3105 (organo-mineral; check),capacity,1000000,t/yr,2025,,secondary,tanzaniainvest.com
+Minjingu Mines & Fertilizer,TZ,fertiliser,SME/mid,2510 / 3105 (check),product,phosphate rock fertiliser + NPK blends; steam granulation (2001),text,,,secondary,IFDC register
+(none),TZ,hydrogen,,2804 10 00,industrial_producer,none found; only Kilwa cooking pilot (Bora Women Go Green),text,2026,,secondary,thecitizen.co.tz
+TANESCO grid,TZ,electricity,,,grid_emission_factor,0.336,kg CO2/kWh,2021,UNFCCC IFI harmonized grid EF (location-based),primary_reported (cited by Twiga + Tanga 2025),TPCPLC & Tanga AFS 2025
+VALIDATION: Dangote Cement (group),NG/TZ,cement,large,2523 29 00,scope1_intensity,570,kg CO2/t cementitious,2024,company scope 1,primary_reported,Dangote 2024 Sustainability Report
+VALIDATION: Dangote Cement (group),NG/TZ,cement,large,2523 29 00,scope1_2_intensity,649,kg CO2/t cementitious,2024,scope 1+2,primary_reported,Dangote 2024 Sustainability Report
+VALIDATION: Elmarakby Steel,EG,iron_steel,SME,7214,direct_plus_indirect,0.44,t CO2/t finished steel,Q2 2025,CBAM-style voluntary,secondary,eurometal.net
+VALIDATION: worldsteel scrap-EAF avg,global,iron_steel,,7207/7214,intensity,0.69,t CO2/t crude steel,2024,scope 1+2,primary_reported,worldsteel Sustainability Indicators 2025
+VALIDATION: Indian induction furnace plants,IN,iron_steel,SME,7207,electricity,800-900,kWh/t (unit implied),~2023,melting,secondary,CEEW
+VALIDATION: Indian hot-rolling mills (4 units),IN,iron_steel,SME,7214,energy,3.13,GJ/t rolled (range 2.36-4.37),2014,rolling incl reheating,primary_study,TERI ES2014IE04
+VALIDATION: Indonesian rolling mills,ID,iron_steel,SME,7214,rolling_emissions,363,kg CO2/t product,2014,rolling only,primary_study,TERI ES2014IE04
+VALIDATION: NPK bulk blending lines,global,fertiliser,SME,3105,electricity,2.8-4.5,kWh/t (vs 18-25 compound),n/a,blending only,vendor_claim,cementl.com
+VALIDATION: Iran NPK granulation (8 plants),IR,fertiliser,SME,3105,energy,1659.92,MJ/t (92% electricity),2017,granulation only,primary_study,J. Saudi Soc. Agric. Sci. 2017
