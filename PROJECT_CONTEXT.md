@@ -37,7 +37,7 @@ As of 2026-11-05, on this Windows machine:
   - OCR is skipped because Tesseract is not installed.
   - Quality inspections are seeded, but no runner stream pulls them.
   - The data-gaps banner on the dashboard typechecks but has not been seen rendered, since this run has no warnings.
-- All work committed and pushed to `origin/main` (2026-11-20, `9a1cf16`).
+- All work committed and pushed to `origin/master` (2026-11-20).
 
 ## 5. Done log
 - 2026-11-20: Wired official CBAM default values (IR 2026/1740) into the calc engine: CSV + builder script, `cbam_default` loader with mark-up and Other-table fallback, precursor defaults, default-method SEE/cost per product, tests (40 pass). Replaced invented `CBAM_DEFAULT_EMBEDDED`.
@@ -45,6 +45,7 @@ As of 2026-11-05, on this Windows machine:
 - 2026-11-05: Fixed runs reporting 0 tCO2e as success: PO item codes now map to emissions rows, demo energy/process/supplier rows are dated in the reported quarter, setup wizard works, seeder stops hiding errors, Stock Entry, Quality Inspection, Purchase Invoice and Sales Invoice payloads fixed, reruns replace rows, zero-emission runs fail.
 
 ## 6. Decisions & rationale
+- `master` is the only branch, local and remote, and GitHub's default (2026-11-20). Former `main` was merged into it (its history kept; the old `master` was a blank README). Worktree `cbam-emission-factors-030151` removed; its notes are in `research_notes/`.
 - Precursors that are not CBAM goods (alumina, anode, AlF3, phosphate rock, potash, sulphur) get 0 embedded emissions on the default path (no invented values). A supplier-declared actual value for them is still counted; whether to drop that too is open (section 8).
 - Default values come from the OJ HTML (legally binding), not the Commission XLS. ISO2 -> OJ country name map in `lookup_tables._EU_COUNTRY_NAME` covers only MVP/target countries.
 - A run with output but 0 tCO2e fails rather than publishing a report, because zero means missing inputs.
@@ -67,4 +68,4 @@ As of 2026-11-05, on this Windows machine:
 - Non-CBAM precursors with a supplier-declared value are still counted. CBAM counts only relevant precursors that are CBAM goods; drop them entirely? (Tests `test_engine_runs_aluminium_facility` and the pipeline tests rely on alumina being counted.)
 - UI wording: "VERIFIED OUTPUT" and "supplier portal declaration (verified)" appear on synthetic demo data.
 - Docs say Python 3.12+ and ERPNext `v15.74.4`; the local venv is 3.14.3 and the compose file uses `v15.120.0`.
-- `main` is the only local branch (2026-11-20: worktree `cbam-emission-factors-030151` and local `master` deleted; worktree notes moved to `research_notes/`). `origin/master` (one README commit) still exists and is GitHub's default branch: switch the default to `main` on GitHub before deleting it.
+
