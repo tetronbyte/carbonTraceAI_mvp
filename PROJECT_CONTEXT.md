@@ -37,16 +37,16 @@ As of 2026-11-05, on this Windows machine:
   - OCR is skipped because Tesseract is not installed.
   - Quality inspections are seeded, but no runner stream pulls them.
   - The data-gaps banner on the dashboard typechecks but has not been seen rendered, since this run has no warnings.
-- Working branch is `main` (local only, not pushed yet). `origin/master` still holds the same commits as `main`.
+- Working branch is `main`, pushed to `origin/main`. `master_old` and old `master` also on remote.
 
 ## 5. Done log
-- 2026-11-23: Split branches: `main` (all work) and `master_old` (pre-2026-11-20 state).
+- 2026-11-23: Split branches: `main` (all work, new changes go here) and `master_old` (frozen copy of old `master`).
 - 2026-11-20: Wired official CBAM default values (IR 2026/1740) into the calc engine: CSV + builder script, `cbam_default` loader with mark-up and Other-table fallback, precursor defaults, default-method SEE/cost per product, tests (40 pass). Replaced invented `CBAM_DEFAULT_EMBEDDED`.
 - 2026-11-05: Started the stack on Windows. Added `.claude/launch.json`, this file and `AGENTS.md`.
 - 2026-11-05: Fixed runs reporting 0 tCO2e as success: PO item codes now map to emissions rows, demo energy/process/supplier rows are dated in the reported quarter, setup wizard works, seeder stops hiding errors, Stock Entry, Quality Inspection, Purchase Invoice and Sales Invoice payloads fixed, reruns replace rows, zero-emission runs fail.
 
 ## 6. Decisions & rationale
-- Branches (2026-11-23): `main` = all work, where every change now goes. `master_old` = `d23a3fd`, the state before the 2026-11-20 work (CBAM defaults, ERPNext fixes, research notes), kept for reference. Old `master` was renamed. Remote still has only `master`; push `main`/`master_old`, switch GitHub default to `main`, then delete remote `master`. Worktree `cbam-emission-factors-030151` removed; its notes are in `research_notes/`.
+- Branches (2026-11-23): `main` = all work, where every change now goes. `master_old` = `e7c962a`, the old `master` exactly as it was (includes all 2026-11-20 work), kept as a frozen snapshot. Old `master` was renamed. Remote `master` still exists: switch GitHub default to `main`, then delete it. Worktree `cbam-emission-factors-030151` removed; its notes are in `research_notes/`.
 - Precursors that are not CBAM goods (alumina, anode, AlF3, phosphate rock, potash, sulphur) get 0 embedded emissions on the default path (no invented values). A supplier-declared actual value for them is still counted; whether to drop that too is open (section 8).
 - Default values come from the OJ HTML (legally binding), not the Commission XLS. ISO2 -> OJ country name map in `lookup_tables._EU_COUNTRY_NAME` covers only MVP/target countries.
 - A run with output but 0 tCO2e fails rather than publishing a report, because zero means missing inputs.
